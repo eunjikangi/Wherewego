@@ -64,6 +64,25 @@ bash deploy/firebase/ml-cherry.sh
 
 Cloud Run 설정은 CPU 1개, 메모리 4GiB, 최소 인스턴스 0개, 최대 인스턴스 1개, 동시 요청 40개, 요청 시간 제한 3,600초, 세션 선호, CPU 상시 할당입니다. AI·브라우저 작업이 HTTP 요청 후에도 진행되도록 CPU 제한을 해제합니다. 최대 1개 인스턴스 설정도 재배포 시 이전 버전과 새 버전의 잠깐 겹치는 실행까지 완전히 막지는 않습니다. 배포 전에 실행 중인 수집·분류 작업을 끝내세요.
 
+## Cloud Shell에서 기존 빌드로 이어서 배포
+
+`ml-cherry`의 앱 이미지가 이미 빌드된 경우 아래 링크로 저장소와 안내를 Google Cloud Shell에서 열 수 있습니다.
+
+https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2Feunjikangi%2FWherewego.git&cloudshell_git_branch=main&cloudshell_tutorial=deploy%2Ffirebase%2FCLOUDSHELL.md&project=ml-cherry
+
+Cloud Shell 터미널에서 실행합니다:
+
+```bash
+bash deploy/firebase/cloudshell.sh --check
+bash deploy/firebase/cloudshell.sh
+```
+
+이 실행은 Cloud Shell의 현재 Google 계정으로 `gcloud`와 Firebase 공식 REST API를 사용합니다. 별도 Firebase CLI 설치·로그인이나 인증 코드 전달이 필요하지 않습니다. Cloud Shell이 계정 사용 승인을 요청하면 승인해야 합니다. 토큰은 메모리에서 API 인증에만 사용하며 출력하거나 저장소에 저장하지 않습니다.
+
+기존 이미지 `asia-northeast3-docker.pkg.dev/ml-cherry/cloud-run-source-deploy/instagram-organizer:latest`를 조회하고 새 빌드를 건너뜁니다. 이미지가 없으면 배포를 시작하기 전에 오류로 중단합니다. 선택 프로젝트의 전용 Hosting 사이트 소유권을 확인한 후 앱 주소로 이동하는 설정만 배포합니다.
+
+일반 스크립트에서도 `--image IMAGE`를 지정하면 해당 프로젝트·지역의 `cloud-run-source-deploy/instagram-organizer` 이미지(tag 또는 sha256 digest)를 재사용합니다. 이 경우 `--check`는 이미지 조회까지 수행합니다. 옵션이 없으면 기존 Cloud Build 흐름을 사용합니다.
+
 ## 관리자 암호와 첫 사용
 
 첫 실행 시 무작위 관리자 암호를 생성해 Secret Manager에 저장합니다. 암호 자체는 터미널 출력이나 명령 인자에 넣지 않습니다. 로컬 사본은 저장소 밖의 `${XDG_STATE_HOME:-$HOME/.local/state}/wherewego/PROJECT_ID/admin-password`에 권한 `0600`으로 보관하고, 그 디렉터리에 `.gitignore`도 생성합니다. 재배포는 기존 Secret의 활성 버전을 재사용하며 암호를 자동 변경하지 않습니다.

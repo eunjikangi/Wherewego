@@ -6,12 +6,13 @@ umask 077
 usage() {
   cat <<'USAGE'
 Usage: deploy/firebase/deploy.sh --project PROJECT_ID [--region REGION]
-       [--site SITE_ID] [--database DATABASE_ID] [--check]
+       [--site SITE_ID] [--database DATABASE_ID] [--image EXISTING_IMAGE] [--check]
 
   --project PROJECT_ID  Existing Firebase / Google Cloud project ID (required)
   --region REGION      Deployment region (default: asia-northeast3)
   --site SITE_ID       Hosting site (default: PROJECT_ID)
   --database DATABASE_ID  Firestore database (default: (default))
+  --image EXISTING_IMAGE  Reuse this project's application image; skip the build
   --check              Read-only checks; do not create or deploy resources
   --help               Show this help
 
@@ -26,6 +27,7 @@ PROJECT_ID=''
 REGION='asia-northeast3'
 SITE_ID=''
 DATABASE_ID='(default)'
+EXISTING_IMAGE=''
 CHECK_ONLY=0
 while (($#)); do
   case "$1" in
@@ -33,6 +35,7 @@ while (($#)); do
     --region) (($# >= 2)) || die '--region requires a value'; REGION=$2; shift 2 ;;
     --site) (($# >= 2)) && [[ -n "$2" ]] || die '--site requires a value'; SITE_ID=$2; shift 2 ;;
     --database) (($# >= 2)) || die '--database requires a value'; DATABASE_ID=$2; shift 2 ;;
+    --image) (($# >= 2)) && [[ -n "$2" ]] || die '--image requires a value'; EXISTING_IMAGE=$2; shift 2 ;;
     --check) CHECK_ONLY=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)" ;;
@@ -45,6 +48,13 @@ SITE_ID=${SITE_ID:-$PROJECT_ID}
 if [[ "$DATABASE_ID" != '(default)' ]]; then
   [[ "$DATABASE_ID" =~ ^[a-z][a-z0-9-]{2,61}[a-z0-9]$ ]] || die 'Invalid Firestore database ID; use 4–63 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit.'
   [[ ! "$DATABASE_ID" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die 'Firestore database IDs must not be UUID-like.'
+fi
+
+IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/instagram-organizer"
+if [[ -n "$EXISTING_IMAGE" ]]; then
+  [[ "$EXISTING_IMAGE" == "$IMAGE_BASE":* || "$EXISTING_IMAGE" == "$IMAGE_BASE"@sha256:* ]] || die '--image must use this project and region in cloud-run-source-deploy/instagram-organizer.'
+  IMAGE_SUFFIX=${EXISTING_IMAGE#"$IMAGE_BASE"}
+  [[ "$IMAGE_SUFFIX" =~ ^(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|@sha256:[a-f0-9]{64})$ ]] || die '--image requires a valid tag or a sha256 digest.'
 fi
 
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
@@ -89,6 +99,10 @@ RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 BUILD_SA="${BUILD_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 BUCKET="${PROJECT_ID}-${SERVICE}-state"
 SECRET="${SERVICE}-admin-password"
+if [[ -n "$EXISTING_IMAGE" ]]; then
+  printf 'Checking existing application image…\n'
+  gc artifacts docker images describe "$EXISTING_IMAGE" --format='value(image_summary.digest)' > /dev/null
+fi
 printf 'Plan: Cloud Run %s (%s), Firestore %s, private bucket %s, Firebase Hosting %s redirect.\n' "$SERVICE" "$REGION" "$DATABASE_ID" "$BUCKET" "$SITE_ID"
 if ((CHECK_ONLY)); then
   printf 'Read-only checks passed. No resources were created or deployed.\n'
@@ -212,14 +226,19 @@ gc secrets add-iam-policy-binding "$SECRET" --member="serviceAccount:$RUNTIME_SA
 
 REPOSITORY='cloud-run-source-deploy'
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:latest"
-if ! gc artifacts repositories describe "$REPOSITORY" --location="$REGION" --format='value(name)' \
-  > /dev/null 2> "$WORK_DIR/artifact-repository-error"; then
-  gc artifacts repositories create "$REPOSITORY" --location="$REGION" --repository-format=docker \
-    --description='Wherewego application images'
+if [[ -n "$EXISTING_IMAGE" ]]; then
+  IMAGE=$EXISTING_IMAGE
+  printf 'Deploying the existing application image to Cloud Run…\n'
+else
+  if ! gc artifacts repositories describe "$REPOSITORY" --location="$REGION" --format='value(name)' \
+    > /dev/null 2> "$WORK_DIR/artifact-repository-error"; then
+    gc artifacts repositories create "$REPOSITORY" --location="$REGION" --repository-format=docker \
+      --description='Wherewego application images'
+  fi
+  printf 'Building Dockerfile with BuildKit and deploying Cloud Run…\n'
+  gc builds submit "$REPO_DIR" --config="$SCRIPT_DIR/cloudbuild.yaml" --region="$REGION" \
+    --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" --substitutions="_IMAGE=$IMAGE"
 fi
-printf 'Building Dockerfile with BuildKit and deploying Cloud Run…\n'
-gc builds submit "$REPO_DIR" --config="$SCRIPT_DIR/cloudbuild.yaml" --region="$REGION" \
-  --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" --substitutions="_IMAGE=$IMAGE"
 gc run deploy "$SERVICE" --image="$IMAGE" --region="$REGION" \
   --service-account="$RUNTIME_SA" \
   --cpu=1 --memory=4Gi --min-instances=0 --max-instances=1 --concurrency=40 \
