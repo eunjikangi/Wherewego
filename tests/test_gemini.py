@@ -316,12 +316,16 @@ class GeminiAPITests(test_core.APITests):
         app.state.browser._context = object()
         records = [{"url": "https://www.instagram.com/p/GEMINI/", "title": "커피", "text": "카페", "source": "saved"}]
         try:
-            with patch.object(app.state.browser, "collect", new=AsyncMock(return_value=records)), patch(
+            with patch.object(app.state.browser, "collect", new=AsyncMock(return_value=records)), patch.object(
+                app.state.browser, "enrich", new=AsyncMock(return_value=records)
+            ) as enrich, patch(
                 "httpx.AsyncClient.post", new=AsyncMock(return_value=response_for([{"id": 0, "category": "여행"}]))
             ) as request:
                 response = self.client.post("/api/collect", json={"mode": "current", "use_ai": True}, headers=headers)
                 self.assertEqual(response.status_code, 200)
                 self.wait_for_job()
+                enrich.assert_awaited_once()
+                self.assertEqual(enrich.await_args.args[0], records)
             self.assertTrue(request.call_args.args[0].endswith("/gemini-flash-latest:generateContent"))
             item = self.client.get("/api/items").json()["items"][0]
             self.assertEqual((item["category"], item["classification"]), ("여행", "ai"))
