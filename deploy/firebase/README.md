@@ -7,12 +7,12 @@
 | 구성 | 역할 |
 | --- | --- |
 | Cloud Run `instagram-organizer` | 앱·API·Chromium·noVNC, 관리자 암호로 접근 제어 |
-| Firestore Native `(default)` | 수집한 링크·카테고리·메모 저장, 서버 서비스 계정으로 접근 |
+| 지정한 Firestore Native 데이터베이스 | 수집한 링크·카테고리·메모 저장, 서버 서비스 계정으로 접근 |
 | 비공개 Cloud Storage 버킷 | 인스타그램 쿠키·localStorage 상태와 AI 설정 체크포인트 |
 | Secret Manager | 재배포에도 유지하는 앱 관리자 암호 |
 | Firebase Hosting | 실제 앱 주소로 이동하는 링크 |
 
-`/data`는 Cloud Run의 임시 디스크입니다. 영속 자료는 Firestore와 비공개 버킷에 보관합니다. 로컬 SQLite 파일이나 전체 Chromium 프로필을 공유 디스크로 마운트하지 않습니다. 기존 Firestore 데이터베이스가 있으면 그대로 사용하고, 기존 Firebase 보안 규칙도 변경하지 않습니다. 서버의 Admin SDK는 전용 서비스 계정으로 접근합니다.
+`/data`는 Cloud Run의 임시 디스크입니다. 영속 자료는 Firestore와 비공개 버킷에 보관합니다. 로컬 SQLite 파일이나 전체 Chromium 프로필을 공유 디스크로 마운트하지 않습니다. 요청한 Firestore 데이터베이스가 이미 있으면 그대로 사용하고, 기존 Firebase 보안 규칙도 변경하지 않습니다. 서버의 Admin SDK는 전용 서비스 계정으로 접근합니다.
 
 ## 준비
 
@@ -43,6 +43,19 @@ bash deploy/firebase/deploy.sh --project YOUR_PROJECT_ID
 
 `YOUR_PROJECT_ID`를 실제 프로젝트 ID로 바꾸세요. `--check`는 프로젝트 접근, 결제 활성화, Firebase 등록 여부만 읽어 확인합니다. 실제 배포 명령은 필요한 API와 리소스를 생성하며, 기본 지역은 서울 `asia-northeast3`입니다. 다른 지역은 `--region`으로 지정할 수 있습니다. 이미 만들어진 Firestore와 버킷의 지역은 바뀌지 않습니다.
 
+기존 Firebase 프로젝트 `ml-cherry`에 앱 전용 Hosting 사이트와 Firestore 데이터베이스를 분리하려면 다음과 같이 실행합니다:
+
+```bash
+bash deploy/firebase/ml-cherry.sh --check
+bash deploy/firebase/ml-cherry.sh
+```
+
+이 명령은 Hosting의 `ml-cherry-wherewego` 사이트와 Firestore의 `instagram-organizer` 데이터베이스를 사용하며 없을 때만 생성합니다. 기존 `ml-cherry` Hosting 사이트, `(default)` 데이터베이스와 다른 데이터베이스·규칙을 덮어쓰지 않습니다. 이름이 같은 앱 전용 사이트가 이미 있다면 해당 사이트의 Hosting 배포는 갱신됩니다. 사이트 ID는 전역적으로 고유해야 하므로 다른 프로젝트가 사용 중인 이름이면 오류로 중단합니다.
+
+이름을 지정한 Firestore 데이터베이스는 무료 할당량 대상이 아니며 Blaze 종량제 요금이 적용됩니다. 선택한 프로젝트의 결제 연결을 확인한 뒤 배포합니다.
+
+옵션을 생략하면 이전 기본 동작인 Hosting `PROJECT_ID`, Firestore `(default)`를 사용합니다. Firestore 이름은 `(default)` 또는 4–63자의 소문자·숫자·하이픈이며, 문자로 시작하고 문자나 숫자로 끝나야 합니다. UUID 형태의 이름은 사용할 수 없습니다. `--check` 출력에는 선택한 사이트와 데이터베이스가 표시되지만 리소스 존재 여부나 이름 사용 가능성까지 확인하지는 않습니다.
+
 전역 `gcloud config set project`를 실행하지 않습니다. 모든 프로젝트 작업과 Firebase 배포에 명시적인 프로젝트 ID를 전달합니다. 저장소의 Dockerfile을 `gcloud run deploy --source`로 빌드하므로 로컬 Docker 설치는 필요하지 않습니다. 소스 빌드 전용 `wherewego-build` 서비스 계정에 `roles/run.builder`를 부여합니다. 최신 gcloud를 사용해야 `--build-service-account`를 지원합니다.
 
 런타임 전용 `wherewego-runtime` 계정에는 프로젝트의 `roles/datastore.user`, 해당 버킷의 `roles/storage.objectAdmin`, 해당 관리자 암호 Secret의 `roles/secretmanager.secretAccessor`만 부여합니다. 버킷은 균일한 버킷 수준 접근과 공개 접근 방지를 적용합니다. Cloud Run URL은 인터넷에서 접속 가능하며 앱의 관리자 인증으로 UI, API와 로그인 브라우저를 보호합니다. 실제 앱 URL을 `PUBLIC_ORIGIN`으로 지정하고 `COOKIE_SECURE=1`을 설정해 HTTPS 쿠키와 요청 출처 검증을 유지합니다. 최종 URL을 안내하기 전에 앱의 `/health` 응답과 Firebase의 `302` 목적지를 확인합니다.
@@ -67,7 +80,7 @@ gcloud secrets versions access latest \
 
 배포가 끝나면 터미널에 실제 Cloud Run URL과 Firebase 진입 URL이 표시됩니다. 앱 관리자 암호로 로그인한 다음, **로그인 브라우저 열기**에서 Instagram에 직접 로그인하세요. 저장함이나 원하는 DM을 열어 수집하고, **AI 설정**에서 OpenAI API를 연결할 수 있습니다. OpenAI 키와 인스타그램 로그인 상태는 비공개 버킷에 저장되므로 버킷 접근 권한도 계정 정보처럼 관리하세요.
 
-Firebase 설정과 이동 페이지는 배포 완료 후 받은 실제 Cloud Run URL로 임시 디렉터리에 생성됩니다. 저장소에 가짜 목적지 URL을 넣거나 기존 Firebase 규칙을 배포하지 않습니다. `PROJECT_ID` Hosting 사이트가 없으면 생성하며 해당 사이트를 명시적으로 배포 대상으로 지정합니다. `PROJECT_ID.web.app`에서 다른 앱을 운영 중이라면 이 스크립트를 실행하지 말고 별도 프로젝트를 사용하세요.
+Firebase 설정과 이동 페이지는 배포 완료 후 받은 실제 Cloud Run URL로 임시 디렉터리에 생성됩니다. 저장소에 가짜 목적지 URL을 넣거나 기존 Firebase 규칙을 배포하지 않습니다. 선택한 Hosting 사이트가 없으면 생성하며 해당 사이트를 명시적으로 배포 대상으로 지정합니다. 진입 URL은 `SITE_ID.web.app`입니다. 선택한 사이트에서 다른 앱을 운영 중이라면 `--site`로 새 이름을 지정하세요.
 
 ## 운영 시 알아둘 점
 

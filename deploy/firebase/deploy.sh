@@ -5,10 +5,13 @@ umask 077
 
 usage() {
   cat <<'USAGE'
-Usage: deploy/firebase/deploy.sh --project PROJECT_ID [--region REGION] [--check]
+Usage: deploy/firebase/deploy.sh --project PROJECT_ID [--region REGION]
+       [--site SITE_ID] [--database DATABASE_ID] [--check]
 
   --project PROJECT_ID  Existing Firebase / Google Cloud project ID (required)
   --region REGION      Deployment region (default: asia-northeast3)
+  --site SITE_ID       Hosting site (default: PROJECT_ID)
+  --database DATABASE_ID  Firestore database (default: (default))
   --check              Read-only checks; do not create or deploy resources
   --help               Show this help
 
@@ -21,11 +24,15 @@ USAGE
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 PROJECT_ID=''
 REGION='asia-northeast3'
+SITE_ID=''
+DATABASE_ID='(default)'
 CHECK_ONLY=0
 while (($#)); do
   case "$1" in
     --project) (($# >= 2)) || die '--project requires a value'; PROJECT_ID=$2; shift 2 ;;
     --region) (($# >= 2)) || die '--region requires a value'; REGION=$2; shift 2 ;;
+    --site) (($# >= 2)) && [[ -n "$2" ]] || die '--site requires a value'; SITE_ID=$2; shift 2 ;;
+    --database) (($# >= 2)) || die '--database requires a value'; DATABASE_ID=$2; shift 2 ;;
     --check) CHECK_ONLY=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)" ;;
@@ -33,6 +40,12 @@ while (($#)); do
 done
 [[ "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || die 'A valid --project ID is required (6–30 lowercase letters, digits or hyphens).'
 [[ "$REGION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]] || die 'Invalid region.'
+SITE_ID=${SITE_ID:-$PROJECT_ID}
+[[ "$SITE_ID" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die 'Invalid Hosting site ID; use 1–63 lowercase letters, digits or hyphens, without leading/trailing hyphens.'
+if [[ "$DATABASE_ID" != '(default)' ]]; then
+  [[ "$DATABASE_ID" =~ ^[a-z][a-z0-9-]{2,61}[a-z0-9]$ ]] || die 'Invalid Firestore database ID; use 4–63 lowercase letters, digits or hyphens, starting with a letter and ending with a letter or digit.'
+  [[ ! "$DATABASE_ID" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die 'Firestore database IDs must not be UUID-like.'
+fi
 
 GCLOUD_BIN=${GCLOUD_BIN:-gcloud}
 FIREBASE_BIN=${FIREBASE_BIN:-firebase}
@@ -76,7 +89,7 @@ RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 BUILD_SA="${BUILD_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 BUCKET="${PROJECT_ID}-${SERVICE}-state"
 SECRET="${SERVICE}-admin-password"
-printf 'Plan: Cloud Run %s (%s), Firestore (default), private bucket %s, Firebase Hosting redirect.\n' "$SERVICE" "$REGION" "$BUCKET"
+printf 'Plan: Cloud Run %s (%s), Firestore %s, private bucket %s, Firebase Hosting %s redirect.\n' "$SERVICE" "$REGION" "$DATABASE_ID" "$BUCKET" "$SITE_ID"
 if ((CHECK_ONLY)); then
   printf 'Read-only checks passed. No resources were created or deployed.\n'
   exit 0
@@ -101,21 +114,21 @@ gc projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD
   --role=roles/run.builder --condition=None > /dev/null
 
 gc firestore databases list --format=json > "$WORK_DIR/databases.json"
-DB_TYPE=$(python3 - "$WORK_DIR/databases.json" <<'PY'
+DB_TYPE=$(python3 - "$WORK_DIR/databases.json" "$DATABASE_ID" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding='utf-8'))
 if isinstance(data, dict):
     data = data.get('databases', [])
 for database in data:
-    if database.get('name', '').endswith('/databases/(default)'):
+    if database.get('name', '').endswith('/databases/' + sys.argv[2]):
         print(database.get('type', 'UNKNOWN'))
         break
 PY
 )
 if [[ -z "$DB_TYPE" ]]; then
-  gc firestore databases create --database='(default)' --location="$REGION" --type=firestore-native
+  gc firestore databases create --database="$DATABASE_ID" --location="$REGION" --type=firestore-native
 elif [[ "$DB_TYPE" != 'FIRESTORE_NATIVE' ]]; then
-  die 'The existing default database is not Firestore Native. It was left unchanged; use a compatible project.'
+  die "The requested database $DATABASE_ID is not Firestore Native. It was left unchanged; use a compatible database."
 fi
 # Existing Firestore databases, their rules and other applications' collections are not replaced.
 
@@ -177,7 +190,7 @@ gc run deploy "$SERVICE" --source="$REPO_DIR" --region="$REGION" \
   --build-service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" \
   --cpu=1 --memory=4Gi --min-instances=0 --max-instances=1 --concurrency=40 \
   --timeout=3600 --no-cpu-throttling --session-affinity --port=8000 --allow-unauthenticated \
-  --set-env-vars="STORE_BACKEND=firestore,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIRESTORE_DATABASE=(default),ORGANIZER_STATE_BUCKET=$BUCKET,DATA_DIR=/data,COOKIE_SECURE=1" \
+  --set-env-vars="STORE_BACKEND=firestore,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIRESTORE_DATABASE=$DATABASE_ID,ORGANIZER_STATE_BUCKET=$BUCKET,DATA_DIR=/data,COOKIE_SECURE=1" \
   --set-secrets="ADMIN_PASSWORD=$SECRET:$VERSION"
 RUN_URL=$(gc run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')
 [[ "$RUN_URL" =~ ^https://[a-zA-Z0-9.-]+\.run\.app$ ]] || die 'Cloud Run did not return a valid HTTPS service URL.'
@@ -193,7 +206,7 @@ if json.load(open(sys.argv[1], encoding='utf-8')).get('ok') is not True:
 PY
 
 "$FIREBASE_BIN" hosting:sites:list --project "$PROJECT_ID" --json > "$WORK_DIR/hosting-sites.json"
-SITE_EXISTS=$(python3 - "$WORK_DIR/hosting-sites.json" "$PROJECT_ID" <<'PY'
+SITE_EXISTS=$(python3 - "$WORK_DIR/hosting-sites.json" "$SITE_ID" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding='utf-8')).get('result', [])
 if isinstance(data, dict):
@@ -202,12 +215,12 @@ print('yes' if any(site.get('name', '').split('/')[-1] == sys.argv[2] or site.ge
 PY
 )
 if [[ "$SITE_EXISTS" != yes ]]; then
-  "$FIREBASE_BIN" hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID" --non-interactive
+  "$FIREBASE_BIN" hosting:sites:create "$SITE_ID" --project "$PROJECT_ID" --non-interactive
 fi
 
 # Generate an actual destination only after Cloud Run reports its real URL.
 mkdir -p "$WORK_DIR/hosting/public"
-python3 - "$WORK_DIR" "$RUN_URL" "$PROJECT_ID" <<'PY'
+python3 - "$WORK_DIR" "$RUN_URL" "$SITE_ID" <<'PY'
 import html, json, pathlib, sys
 directory, destination = pathlib.Path(sys.argv[1]), sys.argv[2]
 config = {'hosting': {'site': sys.argv[3], 'public': 'hosting/public', 'ignore': ['firebase.json', '**/.*', '**/node_modules/**'],
@@ -221,7 +234,7 @@ url = html.escape(destination, quote=True)
 PY
 (cd -- "$WORK_DIR" && "$FIREBASE_BIN" deploy --only hosting --project "$PROJECT_ID" --config "$WORK_DIR/firebase.json" --non-interactive)
 curl --silent --show-error --max-time 60 --retry 3 --retry-delay 3 \
-  --head --output "$WORK_DIR/hosting-headers.txt" "https://$PROJECT_ID.web.app/"
+  --head --output "$WORK_DIR/hosting-headers.txt" "https://$SITE_ID.web.app/"
 python3 - "$WORK_DIR/hosting-headers.txt" "$RUN_URL" <<'PY'
 import pathlib, re, sys
 headers = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')
@@ -230,6 +243,6 @@ destinations = re.findall(r'^location:\s*(.+)$', headers, re.MULTILINE | re.IGNO
 if not codes or codes[-1] != '302' or not destinations or destinations[-1].strip().rstrip('/') != sys.argv[2].rstrip('/'):
     sys.exit('Firebase Hosting redirect verification failed. Review the Hosting deployment before sharing its URL.')
 PY
-printf '\nDeployment complete. App: %s\nFirebase entry: https://%s.web.app\n' "$RUN_URL" "$PROJECT_ID"
+printf '\nDeployment complete. App: %s\nFirebase entry: https://%s.web.app\n' "$RUN_URL" "$SITE_ID"
 printf 'The admin password is stored in Secret Manager: %s (version %s).\n' "$SECRET" "$VERSION"
 printf 'Sign in to the app, then log in to Instagram directly in its browser.\n'
