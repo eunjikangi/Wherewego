@@ -253,3 +253,48 @@ h1 { font-size: 28px; letter-spacing: -1.1px; line-height: 1.3; margin: 0; font-
   .settings-dialog { padding: 22px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+
+/* Collection runs in the user's normal Instagram browser. */
+.collection-steps { margin: 0; padding: 0 24px 8px 46px; display: grid; gap: 16px; color: #65748a; font-size: 12px; line-height: 1.8; }
+.collection-steps li { padding-left: 4px; }
+.collection-steps strong { color: #43546e; display: block; font-size: 12px; margin-bottom: 3px; }
+.collection-steps span { display: block; }
+.collection-steps code { color: #49678d; font-size: 11px; overflow-wrap: anywhere; }
+.collection-device-note { margin: 7px 24px 18px; color: #8a97a9; font-size: 11px; line-height: 1.8; }
+.import-paste-panel { margin: 0 24px 20px; border-top: 1px solid #edf0f6; padding-top: 14px; }
+.import-paste-panel summary, .server-browser-options > summary { color: #5f7594; font-size: 12px; font-weight: 600; cursor: pointer; line-height: 1.8; }
+.import-paste-panel .field-label { margin-top: 15px; margin-bottom: 7px; }
+.import-paste-panel textarea { font-family: ui-monospace, monospace; margin-bottom: 10px; min-height: 110px; }
+.import-error { margin: 0 24px 16px; color: #ad4c3d; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.import-preview { padding: 20px 24px 0; border-top: 1px solid #edf0f6; background: #fcfdff; }
+.import-preview-heading { display: flex; align-items: center; gap: 10px; }
+.import-preview-heading h3 { font-size: 14px; margin: 0; }
+.import-summary { color: #7d8da5; font-size: 11px; line-height: 1.8; margin: 8px 0 12px; }
+.import-list { list-style: none; padding: 0; margin: 0; border: 1px solid #e2e8f2; border-radius: 8px; max-height: 360px; overflow-y: auto; background: white; }
+.import-record { padding: 13px 15px; border-bottom: 1px solid #edf0f6; }
+.import-record:last-child { border-bottom: 0; }
+.import-record-heading { display: flex; align-items: flex-start; gap: 8px; }
+.import-record-heading strong { font-size: 12px; line-height: 1.8; font-weight: 600; overflow-wrap: anywhere; }
+.import-record-heading .source-badge { flex-shrink: 0; }
+.import-record-url, .import-record-missing { margin: 6px 0 0; font-size: 11px; line-height: 1.8; color: #8a97a9; overflow-wrap: anywhere; }
+.import-record-context { margin-top: 6px; color: #6d7d94; font-size: 11px; line-height: 1.8; }
+.import-record-context summary { cursor: pointer; }
+.import-record-context p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 7px 0 0; }
+.import-context-notice { color: #8492a7; font-size: 11px; line-height: 1.9; margin: 14px 0 17px; }
+.server-browser-options { border: 1px solid var(--line); border-radius: 10px; padding: 15px 21px; margin-top: 18px; background: #fcfdff; }
+.server-browser-warning { color: #9a704b; background: #fff8eb; border: 1px solid #f1e5cc; border-radius: 7px; padding: 11px 13px; font-size: 11px; line-height: 1.9; margin: 15px 0; }
+.server-browser-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.server-browser-controls .collection-hint { flex-basis: 100%; }
+@media (max-width: 590px) {
+  #extension-download { width: 100%; }
+  .collection-steps { padding: 0 18px 8px 38px; font-size: 11px; gap: 13px; }
+  .collection-steps strong { font-size: 11px; }
+  .collection-device-note { margin-left: 18px; margin-right: 18px; font-size: 10px; }
+  .import-paste-panel { margin-left: 18px; margin-right: 18px; }
+  .import-error { margin-left: 18px; margin-right: 18px; font-size: 11px; }
+  .import-preview { padding: 18px 18px 0; }
+  .import-context-notice { font-size: 10px; }
+  #import-confirm { flex: 1; }
+  .server-browser-options { padding: 14px 17px; }
+  .server-browser-warning { font-size: 10px; }
+}

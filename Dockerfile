@@ -8,6 +8,7 @@ RUN --mount=type=secret,id=proxy_ca if [ -f /run/secrets/proxy_ca ]; then PIP_CE
 RUN useradd --create-home --uid 1000 organizer && mkdir -p /data /tmp/supervisor && chown organizer:organizer /data /tmp/supervisor
 COPY --chown=organizer:organizer app ./app
 COPY --chown=organizer:organizer static ./static
+COPY --chown=organizer:organizer extension ./extension
 COPY --chown=organizer:organizer supervisord.conf /etc/supervisor/conf.d/organizer.conf
 USER organizer
 EXPOSE 8000

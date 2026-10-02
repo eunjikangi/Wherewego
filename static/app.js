@@ -11,6 +11,10 @@
     browserStarting: false,
     collectionStarting: false,
     classifyStarting: false,
+    importStarting: false,
+    importAwaitingCompletion: false,
+    pendingImport: null,
+    pendingImportRaw: null,
     configSaving: false,
     aiPreference: null,
     aiConfig: null,
@@ -30,6 +34,9 @@
   const defaultCategories = ["맛집", "카페", "여행", "쇼핑·패션", "뷰티", "집·인테리어", "운동·건강", "공부·업무", "문화·취미", "분류 보류"];
   const aiProviders = { gemini: { name: "Gemini", model: "gemini-flash-latest" }, openai: { name: "OpenAI", model: "gpt-4.1-mini" } };
   const browserUrl = "/browser/vnc.html?autoconnect=true&resize=scale&path=browser/websockify";
+  const importBridge = window.WherewegoImportBridge;
+  const maxImportBytes = 1536 * 1024;
+  const instagramHosts = new Set(["instagram.com", "www.instagram.com", "m.instagram.com"]);
 
   function node(tag, className, content) {
     const element = document.createElement(tag);
@@ -52,7 +59,14 @@
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     const response = await fetch(path, { credentials: "same-origin", ...options, headers });
     if (response.status === 401) {
-      window.location.assign("/login");
+      if (state.pendingImportRaw) importBridge?.persist(state.pendingImportRaw);
+      let fallbackHash = "";
+      if (importBridge?.storageFailed && state.pendingImportRaw) {
+        const encoded = encodeURIComponent(state.pendingImportRaw);
+        if (encoded.length <= maxImportBytes) fallbackHash = "#wherewego=" + encoded;
+        else throw new Error("앱 로그인이 만료되었습니다. 이 탭을 유지하고 새 탭에서 앱에 로그인한 뒤 다시 가져와 주세요.");
+      } else if (importBridge?.storageFailed && window.location.hash.startsWith("#wherewego=")) fallbackHash = window.location.hash;
+      window.location.assign("/login" + fallbackHash);
       throw new Error("앱에 다시 로그인해 주세요.");
     }
     let body;
@@ -70,7 +84,7 @@
   }
 
   function isBusy() {
-    return Boolean(state.status?.busy || state.collectionStarting || state.classifyStarting || state.browserStarting);
+    return Boolean(state.status?.busy || state.collectionStarting || state.classifyStarting || state.browserStarting || state.importStarting || state.importAwaitingCompletion);
   }
 
   function updateControls() {
@@ -79,24 +93,29 @@
     byId("collect-current").disabled = !ready || busy;
     byId("collect-scroll").disabled = !ready || busy;
     byId("browser-button").disabled = state.browserStarting;
-    byId("empty-action").disabled = state.browserStarting;
+    byId("empty-action").disabled = false;
+    byId("import-confirm").disabled = busy || !state.pendingImport;
+    byId("import-confirm").textContent = state.importStarting || state.importAwaitingCompletion ? "저장·분류 중" : "가져오기·분류";
+    byId("import-discard").disabled = state.importStarting || state.importAwaitingCompletion;
+    byId("import-discard").hidden = !state.pendingImportRaw && !byId("import-paste-input").value && !importBridge?.error;
+    byId("import-paste-preview").disabled = state.importStarting || state.importAwaitingCompletion;
+    byId("import-paste-input").disabled = state.importStarting || state.importAwaitingCompletion;
     byId("use-ai").disabled = busy;
     byId("ai-control").hidden = !state.status?.ai_available;
     byId("ai-setup-cta").hidden = Boolean(state.status?.ai_available);
     byId("reclassify-button").disabled = !state.status?.ai_available || busy || !(state.status?.total > 0);
     byId("use-ai").checked = Boolean(state.status?.ai_available && state.aiPreference !== false);
-    const label = state.browserStarting ? "브라우저 준비 중" : state.browserOpen ? "브라우저 접기" : "로그인 브라우저 열기";
+    const label = state.browserStarting ? "브라우저 준비 중" : state.browserOpen ? "서버 브라우저 접기" : "서버 브라우저 열기";
     byId("browser-button").replaceChildren(document.createTextNode(label), node("span", "", state.browserOpen ? "↑" : "↗"));
     byId("browser-button").lastChild.setAttribute("aria-hidden", "true");
     byId("browser-button").setAttribute("aria-expanded", String(state.browserOpen));
     if (state.statusFailed) setConnection("offline", "연결 확인 필요");
     else if (busy) setConnection("busy", state.browserStarting ? "브라우저 준비 중" : "작업 중");
-    else if (ready) setConnection("ready", "브라우저 연결됨");
-    else if (state.status) setConnection("", "로그인 전");
+    else if (state.status) setConnection("ready", "서버 연결됨");
     byId("browser-panel").hidden = !state.browserOpen;
     if (ready && state.browserOpen) mountBrowser();
     if (busy) byId("collection-hint").textContent = "작업이 끝나면 수집한 자료가 아래에 표시됩니다.";
-    else byId("collection-hint").textContent = byId("use-ai").checked ? "현재 열린 화면을 수집합니다. AI 분류 때 게시물 설명을 추가로 읽습니다." : "수집은 현재 열어 둔 저장함이나 DM 화면에서 진행됩니다.";
+    else byId("collection-hint").textContent = byId("use-ai").checked ? "서버 화면을 수집하고 게시물 설명을 추가로 읽습니다. 캡챠가 반복되면 PC 수집을 사용하세요." : "서버 브라우저에서 열어 둔 저장함이나 DM 화면을 수집합니다.";
     byId("sidebar-total").textContent = String(state.status?.total ?? state.items.length);
   }
 
@@ -120,7 +139,8 @@
     const completed = ["completed", "done", "success"].includes(job?.status);
     panel.hidden = !busy && !failed && !completed;
     panel.className = `job-progress${failed ? " failed" : completed && !busy ? " completed" : ""}`;
-    if (state.browserStarting) byId("job-message").textContent = "로그인 브라우저를 준비하고 있습니다.";
+    if (state.importStarting) byId("job-message").textContent = "확인한 자료를 가져와 분류합니다.";
+    else if (state.browserStarting) byId("job-message").textContent = "서버 브라우저를 준비하고 있습니다.";
     else if (state.collectionStarting) byId("job-message").textContent = "현재 열어 둔 화면에서 자료를 수집합니다.";
     else if (state.classifyStarting) byId("job-message").textContent = "저장한 자료를 AI로 다시 분류하고 있습니다.";
     else {
@@ -277,8 +297,8 @@
       byId("empty-footnote").hidden = true;
     } else {
       byId("empty-title").textContent = "아직 모아 둔 자료가 없어요";
-      byId("empty-description").textContent = "로그인 브라우저를 열어 인스타그램에 로그인하세요.\n저장함이나 원하는 DM을 연 뒤 ‘현재 화면 수집’을 누르면 시작됩니다.";
-      byId("empty-action").textContent = "로그인 브라우저 열기 ↗";
+      byId("empty-description").textContent = "PC 크롬·엣지에 확장 프로그램을 설치하세요.\n평소 쓰는 Instagram에서 자료를 가져온 뒤 이곳에서 확인할 수 있어요.";
+      byId("empty-action").textContent = "PC에서 가져오는 방법 보기 ↑";
       byId("empty-footnote").hidden = false;
     }
   }
@@ -321,6 +341,17 @@
       if (status.session_warning && status.session_warning !== state.status?.session_warning) toast(status.session_warning, true);
       state.status = status;
       state.statusFailed = false;
+      if (state.importAwaitingCompletion && !status.busy) {
+        const jobStatus = status.job?.status;
+        if (["done", "completed", "success"].includes(jobStatus)) {
+          state.importAwaitingCompletion = false;
+          discardImport();
+          toast("가져온 자료를 저장했습니다.");
+        } else if (["error", "failed", "idle"].includes(jobStatus)) {
+          state.importAwaitingCompletion = false;
+          showImportError(status.job?.message || "자료를 저장하지 못했습니다. 가져올 내용을 유지했으니 다시 시도해 주세요.");
+        }
+      }
       updateControls();
       renderJob();
       renderCategories();
@@ -398,6 +429,146 @@
     } catch (error) { toast(error.message || "AI 분류를 시작하지 못했습니다.", true); }
     finally {
       state.classifyStarting = false;
+      updateControls();
+      renderJob();
+      schedulePoll();
+    }
+  }
+
+  function importUrl(value, field, instagramOnly = false) {
+    if (typeof value !== "string" || !value.trim() || value.length > 2048) throw new Error(field + "을 확인해 주세요.");
+    const parsed = safeUrl(value.trim());
+    if (!parsed || parsed.username || parsed.password) throw new Error("로그인 정보가 없는 HTTP 또는 HTTPS 링크만 가져올 수 있어요.");
+    if (instagramOnly && !instagramHosts.has(parsed.hostname.toLowerCase())) throw new Error("수집 화면 주소는 Instagram 주소여야 합니다.");
+    return parsed;
+  }
+
+  function parseImport(raw) {
+    if (typeof raw !== "string" || !raw.trim()) throw new Error("확장에서 복사한 자료를 붙여넣어 주세요.");
+    if (new TextEncoder().encode(raw).length > maxImportBytes) throw new Error("자료가 너무 큽니다. 확장에서 적은 수의 자료를 나누어 가져오세요.");
+    let payload;
+    try { payload = JSON.parse(raw); }
+    catch { throw new Error("자료 형식을 읽지 못했습니다. 확장의 ‘자료 복사’로 복사한 내용을 붙여넣어 주세요."); }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload.version !== 1 ||
+        Object.keys(payload).some((key) => !["version", "records"].includes(key)) ||
+        !Array.isArray(payload.records) || payload.records.length < 1 || payload.records.length > 500) {
+      throw new Error("지원하는 가져오기 형식이 아닙니다. 한 번에 1~500개의 자료를 가져올 수 있어요.");
+    }
+    return payload.records.map((record) => {
+      if (!record || typeof record !== "object" || Array.isArray(record) ||
+          Object.keys(record).some((key) => !["url", "title", "text", "source", "source_url"].includes(key)) ||
+          !["saved", "dm", "post"].includes(record.source)) {
+        throw new Error("자료에 지원하지 않는 항목이 있습니다. 확장에서 자료를 다시 모아 주세요.");
+      }
+      const url = importUrl(record.url, "자료 링크");
+      if (instagramHosts.has(url.hostname.toLowerCase())) {
+        if (!/^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new Error("Instagram 게시물·릴스 링크만 가져올 수 있어요.");
+      } else if (record.source !== "dm") throw new Error("외부 링크는 DM에서 가져온 자료만 지원합니다.");
+      const title = record.title === undefined ? "" : record.title;
+      const text = record.text === undefined ? "" : record.text;
+      if (typeof title !== "string" || title.length > 250 || typeof text !== "string" || text.length > 2500) {
+        throw new Error("자료의 제목이나 설명이 너무 깁니다. 확장에서 다시 모아 주세요.");
+      }
+      const clean = { url: record.url.trim(), title, text, source: record.source };
+      if (record.source_url !== undefined) {
+        importUrl(record.source_url, "수집 화면 주소", true);
+        clean.source_url = record.source_url.trim();
+      }
+      return clean;
+    });
+  }
+
+  function showImportError(message) {
+    byId("import-error").textContent = message;
+    byId("import-error").hidden = !message;
+  }
+
+  function renderImportPreview() {
+    const records = state.pendingImport;
+    byId("import-preview").hidden = !records;
+    byId("import-list").replaceChildren();
+    if (!records) { updateControls(); return; }
+    byId("import-count").textContent = records.length + "개";
+    const counts = { saved: 0, dm: 0, post: 0 };
+    for (const record of records) counts[record.source] += 1;
+    byId("import-summary").textContent = Object.entries(counts).filter(([, count]) => count).map(([source, count]) => sourceNames[source] + " " + count + "개").join(" · ");
+    for (const record of records) {
+      const row = node("li", "import-record");
+      const heading = node("div", "import-record-heading");
+      heading.append(node("span", "source-badge", sourceNames[record.source]), node("strong", "", record.title || "제목 없는 자료"));
+      row.append(heading, node("p", "import-record-url", record.url));
+      if (record.text.trim()) {
+        const context = node("details", "import-record-context");
+        context.append(node("summary", "", "분류에 사용할 설명 보기"), node("p", "", record.text));
+        row.append(context);
+      } else row.append(node("p", "import-record-missing", "설명이 없어 AI가 분류하기 어려울 수 있어요."));
+      byId("import-list").append(row);
+    }
+    updateControls();
+  }
+
+  function stageImport(raw, focus = true) {
+    state.pendingImportRaw = raw;
+    try {
+      state.pendingImport = parseImport(raw);
+      importBridge?.persist(raw);
+      showImportError(importBridge?.storageFailed ? "브라우저 임시 저장공간을 사용할 수 없습니다. 가져오기를 마치기 전 이 탭을 닫지 마세요." : "");
+    } catch (error) {
+      state.pendingImport = null;
+      showImportError(error.message || "가져올 자료를 읽지 못했습니다.");
+    }
+    renderImportPreview();
+    if (focus) {
+      if (state.pendingImport) {
+        byId("import-preview").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        byId("import-preview").focus({ preventScroll: true });
+      } else byId("import-paste-input").focus();
+    }
+  }
+
+  function loadPendingImport(focus = true) {
+    importBridge?.capture();
+    if (importBridge?.error) {
+      state.pendingImport = null;
+      showImportError(importBridge.error);
+      renderImportPreview();
+      return;
+    }
+    const raw = importBridge?.read();
+    if (raw) stageImport(raw, focus);
+  }
+
+  function discardImport() {
+    state.pendingImport = null;
+    state.pendingImportRaw = null;
+    importBridge?.clear();
+    byId("import-paste-input").value = "";
+    showImportError("");
+    renderImportPreview();
+  }
+
+  async function confirmImport() {
+    if (isBusy() || !state.pendingImport) return;
+    const records = state.pendingImport;
+    state.importStarting = true;
+    ++state.statusRequestId;
+    clearTimeout(state.pollTimer);
+    updateControls();
+    renderJob();
+    try {
+      await request("/api/import", {
+        method: "POST",
+        body: JSON.stringify({ records, use_ai: Boolean(state.status?.ai_available && byId("use-ai").checked) }),
+      });
+      state.importAwaitingCompletion = true;
+      toast("자료를 가져오고 있습니다. 저장이 끝날 때까지 내용을 유지합니다.");
+      await refreshStatus();
+      if (!state.status?.busy) await loadItems();
+      byId("job-progress").focus({ preventScroll: true });
+    } catch (error) {
+      showImportError(error.message || "자료를 가져오지 못했습니다. 내용을 유지했으니 다시 시도해 주세요.");
+    } finally {
+      state.importStarting = false;
       updateControls();
       renderJob();
       schedulePoll();
@@ -512,8 +683,8 @@
     if (state.loadFailed) loadItems();
     else if (state.source || state.category || state.query) resetFilters();
     else {
-      if (state.browserOpen) byId("browser-panel").scrollIntoView({ behavior: "smooth", block: "start" });
-      else toggleBrowser();
+      byId("client-collection").scrollIntoView({ behavior: "smooth", block: "start" });
+      byId("client-collection").focus({ preventScroll: true });
     }
   });
   byId("collect-current").addEventListener("click", () => collect("current"));
@@ -526,6 +697,12 @@
       window.location.assign("/login");
     } catch (error) { toast(error.message || "로그아웃하지 못했습니다.", true); button.disabled = false; }
   });
+  byId("import-paste-preview").addEventListener("click", () => stageImport(byId("import-paste-input").value));
+  byId("import-paste-input").addEventListener("input", updateControls);
+  byId("import-confirm").addEventListener("click", confirmImport);
+  byId("import-discard").addEventListener("click", () => { discardImport(); byId("client-collection").focus({ preventScroll: true }); });
+  window.addEventListener("hashchange", () => { if (!state.importStarting && !state.importAwaitingCompletion) loadPendingImport(); });
   window.addEventListener("pagehide", () => clearTimeout(state.pollTimer));
+  loadPendingImport();
   Promise.all([refreshStatus(), loadItems()]);
 })();

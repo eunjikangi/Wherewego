@@ -46,7 +46,7 @@ class DOMTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from playwright.async_api import async_playwright
         self.p = await async_playwright().start()
-        self.browser = await self.p.chromium.launch(executable_path=os.getenv("CHROMIUM_EXECUTABLE", "/usr/bin/chromium"), headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        self.browser = await self.p.chromium.launch(executable_path=(os.getenv("CHROMIUM_EXECUTABLE") or self.p.chromium.executable_path), headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         self.page = await self.browser.new_page()
 
     async def asyncTearDown(self):

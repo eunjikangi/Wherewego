@@ -80,7 +80,7 @@ class BrowserStateDOMTests(unittest.IsolatedAsyncioTestCase):
         from playwright.async_api import async_playwright
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(
-            executable_path=os.getenv('CHROMIUM_EXECUTABLE', '/usr/bin/chromium'), headless=True,
+            executable_path=(os.getenv('CHROMIUM_EXECUTABLE') or self.playwright.chromium.executable_path), headless=True,
             args=['--no-sandbox', '--disable-dev-shm-usage'],
         )
         self.context = await self.browser.new_context()

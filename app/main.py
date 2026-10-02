@@ -3,34 +3,37 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
+import re
 import secrets
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import websockets
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, model_validator
 
 from .browser import BrowserManager
 from .ai import AISettings
 from .classifier import CATEGORIES, classify_records
-from .store import Store
+from .store import Store, normalize_url
 
 os.umask(0o077)
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 COOKIE = "organizer_session"
 SESSION_SECONDS = 12 * 60 * 60
-LOGIN_PAGE = """<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>모아분류 로그인</title>
-<link rel='stylesheet' href='/style.css'><body><main style='max-width:440px;margin:12vh auto;padding:24px'><h1>모아분류</h1><p>서버 관리자 암호로 접속하세요.</p><form method='post' action='/login'><label for='password'>관리자 암호</label><input id='password' name='password' type='password' autocomplete='current-password' required style='display:block;width:100%;margin:12px 0;padding:14px;border:1px solid #ccd4e0;border-radius:10px'><button type='submit' style='padding:12px 20px;background:#245eea;color:white;border:0;border-radius:10px'>로그인</button></form><p style='font-size:14px;color:#52617b'>인스타그램 비밀번호는 접속 후 브라우저의 Instagram 화면에서 직접 입력합니다.</p>ERROR</main></body></html>"""
+LOGIN_PAGE = """<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>모아분류 로그인</title><script src='/login-import.js' defer></script>
+<link rel='stylesheet' href='/style.css'><body><main style='max-width:440px;margin:12vh auto;padding:24px'><h1>모아분류</h1><p>서버 관리자 암호로 접속하세요.</p><form method='post' action='/login'><label for='password'>관리자 암호</label><input id='password' name='password' type='password' autocomplete='current-password' required style='display:block;width:100%;margin:12px 0;padding:14px;border:1px solid #ccd4e0;border-radius:10px'><button type='submit' style='padding:12px 20px;background:#245eea;color:white;border:0;border-radius:10px'>로그인</button></form><p style='font-size:14px;color:#52617b'>인스타그램은 본인 PC의 Chrome·Edge에서 로그인한 뒤 확장 프로그램으로 가져옵니다.</p>ERROR</main></body></html>"""
 
 
 def signed_session(password, expires=None):
@@ -75,6 +78,66 @@ class AIInput(BaseModel):
 
 class ClassifyInput(BaseModel):
     only_pending: bool = False
+    enrich_remote: bool = False
+
+
+IMPORT_BODY_LIMIT = 2 * 1024 * 1024
+EXTENSION_FILES = (
+    "manifest.json", "popup.html", "popup.js", "popup.css", "content.js", "README.md",
+)
+
+
+def client_url(raw, source, context=False):
+    """Validate browser-supplied links without fetching their contents."""
+    if not raw or any(ord(char) <= 32 for char in raw) or "\\" in raw:
+        raise ValueError("링크 형식을 확인하세요.")
+    try:
+        parsed = urlsplit(raw)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+        if parsed.scheme not in ("http", "https") or not host or parsed.username is not None or parsed.password is not None:
+            raise ValueError
+        instagram = host == "instagram.com" or host.endswith(".instagram.com")
+        if context:
+            if not instagram or port not in (None, 80, 443):
+                raise ValueError
+            # DM thread and saved-page paths are context only; query data is discarded.
+            return urlunsplit(("https", "www.instagram.com", parsed.path or "/", "", ""))
+        if instagram:
+            match = re.fullmatch(r"/(p|reel|tv)/([A-Za-z0-9_-]+)/?", parsed.path)
+            if not match or port not in (None, 80, 443):
+                raise ValueError
+            return f"https://www.instagram.com/{match[1]}/{match[2]}/"
+        if source != "dm":
+            raise ValueError
+        normalized = normalize_url(raw)
+        if not normalized:
+            raise ValueError
+        return normalized
+    except (ValueError, TypeError):
+        raise ValueError("Instagram 게시물 링크 또는 DM으로 공유한 http·https 링크를 확인하세요.") from None
+
+
+class ImportRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: StrictStr = Field(min_length=1, max_length=2048)
+    title: StrictStr = Field(default="", max_length=250)
+    text: StrictStr = Field(default="", max_length=2500)
+    source: Literal["saved", "dm", "post"]
+    source_url: StrictStr | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_links(self):
+        self.url = client_url(self.url, self.source)
+        if self.source_url is not None:
+            self.source_url = client_url(self.source_url, self.source, context=True)
+        return self
+
+
+class ImportInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    records: list[ImportRecord] = Field(min_length=1, max_length=500)
+    use_ai: StrictBool = False
 
 
 async def checkpoint_browser():
@@ -133,7 +196,7 @@ async def lifespan(app):
     app.state.checkpoint_lock = asyncio.Lock()
     app.state.session_warning = ""
     app.state.busy = False
-    app.state.job = {"status": "idle", "message": "브라우저를 열고 인스타그램에 로그인하세요.", "added": 0, "updated": 0}
+    app.state.job = {"status": "idle", "message": "PC의 Instagram에서 확장 프로그램으로 가져온 뒤 분류하세요.", "added": 0, "updated": 0}
     app.state.task = None
     app.state.login_failures = []
     checkpoint_task = asyncio.create_task(periodic_checkpoints()) if app.state.cloud else None
@@ -166,7 +229,7 @@ async def validation_error(request, error):
 @app.middleware("http")
 async def session_protection(request, call_next):
     path = request.url.path
-    public = path in ("/login", "/health", "/style.css")
+    public = path in ("/login", "/health", "/style.css", "/login-import.js")
     password = getattr(app.state, "password", "")
     if not public and not valid_session(request.cookies.get(COOKIE), password):
         if path.startswith("/api/"):
@@ -237,6 +300,36 @@ async def styles():
 @app.get("/static/app.js")
 async def script():
     return FileResponse(STATIC / "app.js", media_type="application/javascript")
+
+
+@app.get("/login-import.js")
+async def import_login_script():
+    return FileResponse(STATIC / "login-import.js", media_type="application/javascript")
+
+
+@app.get("/extension.zip")
+async def extension_archive():
+    directory = ROOT / "extension"
+    if directory.is_symlink():
+        raise HTTPException(503, "확장 프로그램 파일을 확인하지 못했습니다.")
+    root = directory.resolve()
+    entries = []
+    for name in EXTENSION_FILES:
+        target = root / name
+        if not target.is_file():
+            raise HTTPException(503, "확장 프로그램 파일을 준비하지 못했습니다.")
+        if target.is_symlink() or not target.resolve().is_relative_to(root) or target.stat().st_size > 512 * 1024:
+            raise HTTPException(503, "확장 프로그램 파일을 확인하지 못했습니다.")
+        entries.append((name, target.read_bytes()))
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for name, contents in entries:
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.external_attr = 0o100644 << 16
+            bundle.writestr(entry, contents)
+    return Response(archive.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="wherewego-extension.zip"'})
 
 
 async def status():
@@ -340,13 +433,69 @@ async def collect(options: CollectInput):
     return await status()
 
 
+async def run_client_import(options):
+    app.state.job = {"status": "running", "message": "PC에서 가져온 링크를 분류하고 있습니다.", "added": 0, "updated": 0}
+    try:
+        records = [record.model_dump(exclude_none=True) for record in options.records]
+        classified, warning = await classify_records(
+            records, options.use_ai, api_key=app.state.ai.key(),
+            model=app.state.ai.model(), provider=app.state.ai.provider())
+        added, updated = await asyncio.to_thread(app.state.store.upsert, classified)
+        message = f"가져온 링크 {len(records)}개: 새 항목 {added}개, 보완한 항목 {updated}개."
+        if warning:
+            message += " " + warning
+        app.state.job = {"status": "done", "message": message, "added": added, "updated": updated}
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        # Imported post/DM text is private; neither submitted data nor exception text is logged.
+        logging.error("Client import failed (%s)", type(error).__name__)
+        app.state.job = {"status": "error", "message": "가져온 링크를 저장하지 못했습니다. 잠시 후 다시 시도하세요.", "added": 0, "updated": 0}
+    finally:
+        app.state.busy = False
+
+
+@app.post("/api/import")
+async def import_records(request: Request):
+    if app.state.busy:
+        raise HTTPException(409, "이미 작업 중입니다.")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "JSON 형식으로 가져오세요.")
+    length = request.headers.get("content-length")
+    if length is not None:
+        try:
+            if int(length) < 0 or int(length) > IMPORT_BODY_LIMIT:
+                raise HTTPException(413, "한 번에 가져오는 자료는 2MB 이내로 제한됩니다.")
+        except ValueError:
+            raise HTTPException(400, "요청 크기를 확인할 수 없습니다.") from None
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > IMPORT_BODY_LIMIT:
+            raise HTTPException(413, "한 번에 가져오는 자료는 2MB 이내로 제한됩니다.")
+        body.extend(chunk)
+    try:
+        values = ImportInput.model_validate_json(bytes(body))
+    except ValidationError:
+        # Avoid returning submitted credentials or private DM text in validation errors.
+        raise HTTPException(422, "수집 데이터 형식이나 링크를 확인하세요. 한 번에 1~500개를 가져올 수 있습니다.") from None
+    if values.use_ai and not app.state.ai.key():
+        raise HTTPException(422, "먼저 AI 설정에서 API 키를 연결하세요.")
+    # A second request may have started a job while this request was streaming.
+    if app.state.busy:
+        raise HTTPException(409, "이미 작업 중입니다.")
+    app.state.busy = True
+    app.state.job = {"status": "running", "message": "PC에서 가져온 링크를 분류하고 있습니다.", "added": 0, "updated": 0}
+    app.state.task = asyncio.create_task(run_client_import(values))
+    return await status()
+
+
 async def run_reclassification(options):
     app.state.job = {"status": "running", "message": "기존 항목을 AI로 다시 분류하고 있습니다.", "added": 0, "updated": 0}
     try:
         stored = await asyncio.to_thread(app.state.store.all)
         records = [item for item in stored
                    if item["classification"] != "manual" and (not options.only_pending or item["category"] == "분류 보류")]
-        if app.state.browser.ready:
+        if options.enrich_remote and app.state.browser.ready:
             async def progress(message):
                 app.state.job["message"] = message
             pending = sorted((item for item in records if item["category"] == "분류 보류"), key=lambda item: item.get("detail_checked", False))

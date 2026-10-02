@@ -2,13 +2,13 @@
 
 이 디렉터리는 배포 준비용입니다. 스크립트를 실행하기 전에는 클라우드 리소스가 생성되지 않으며, 이 저장소가 배포되어 있다는 뜻은 아닙니다.
 
-모아분류의 UI, API, 로그인 브라우저와 noVNC WebSocket은 하나의 Cloud Run 서비스에서 실행합니다. Firebase Hosting은 앱의 실제 Cloud Run 주소로 `302` 이동시키는 진입점입니다. 브라우저 주소는 Cloud Run 주소로 바뀝니다. Hosting의 Cloud Run rewrite를 사용하지 않으므로 브라우저 WebSocket, 요청 시간 제한, 앱 로그인 쿠키를 Hosting 프록시에 의존하지 않습니다.
+모아분류의 UI·API는 Cloud Run에서 실행하며, 수집은 사용자의 PC 브라우저 확장 프로그램이 담당합니다. 선택 기능인 서버 브라우저와 noVNC WebSocket도 같은 서비스에 포함합니다. Firebase Hosting은 앱의 실제 Cloud Run 주소로 `302` 이동시키는 진입점입니다. 브라우저 주소는 Cloud Run 주소로 바뀝니다. Hosting의 Cloud Run rewrite를 사용하지 않으므로 브라우저 WebSocket, 요청 시간 제한, 앱 로그인 쿠키를 Hosting 프록시에 의존하지 않습니다.
 
 | 구성 | 역할 |
 | --- | --- |
 | Cloud Run `instagram-organizer` | 앱·API·Chromium·noVNC, 관리자 암호로 접근 제어 |
 | 지정한 Firestore Native 데이터베이스 | 수집한 링크·카테고리·메모 저장, 서버 서비스 계정으로 접근 |
-| 비공개 Cloud Storage 버킷 | 인스타그램 쿠키·localStorage 상태와 AI 설정 체크포인트 |
+| 비공개 Cloud Storage 버킷 | AI 설정 및 선택 기능인 서버 브라우저의 상태 체크포인트 |
 | Secret Manager | 재배포에도 유지하는 앱 관리자 암호 |
 | Firebase Hosting | 실제 앱 주소로 이동하는 링크 |
 

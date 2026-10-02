@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Wherewego · PC에서 가져오기",
+  "description": "로그인된 PC Instagram의 저장함·열린 DM 대화·게시물에서 링크와 설명을 직접 가져옵니다.",
+  "version": "1.0.0",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "clipboardWrite"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Wherewego PC 수집"
+  },
+  "minimum_chrome_version": "102"
+}

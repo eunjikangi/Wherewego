@@ -298,4 +298,4 @@ if not codes or codes[-1] != '302' or not destinations or destinations[-1].strip
 PY
 printf '\nDeployment complete. App: %s\nFirebase entry: https://%s.web.app\n' "$RUN_URL" "$SITE_ID"
 printf 'The admin password is stored in Secret Manager: %s (version %s).\n' "$SECRET" "$VERSION"
-printf 'Sign in to the app, then log in to Instagram directly in its browser.\n'
+printf 'Sign in to the app, install the PC extension, and collect from your own Instagram browser.\n'

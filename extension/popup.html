@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wherewego PC 수집</title><link rel="stylesheet" href="popup.css"></head>
+<body><header><h1>PC에서 가져오기</h1><p>평소 쓰는 PC 브라우저에서 Instagram에 로그인하고 저장함·DM 대화·게시물을 열어주세요.</p></header>
+<section aria-label="수집"><div class="actions"><button id="captureCurrent" type="button">현재 화면 수집</button><button id="captureScroll" type="button" class="secondary">스크롤하며 수집</button></div>
+<p class="hint">이미 불러온 화면을 읽습니다. 저장함은 아래로, 열린 DM 대화는 이전 메시지 쪽으로 최대 20번 스크롤합니다. 다른 대화는 열지 않습니다.</p>
+<p id="status" role="status" aria-live="polite">수집 버튼을 누르면 목록을 확인할 수 있습니다.</p></section>
+<section aria-label="전송 전 확인"><div class="review-heading"><h2>전송 전 확인 <span id="count">0개</span></h2><button id="clear" type="button" class="text-button" disabled>비우기</button></div>
+<ul id="review" aria-label="수집된 항목"></ul><p class="hint">저장함의 격자는 URL만 가져올 수 있습니다. 설명이 필요한 게시물은 상세 화면에서 다시 수집해주세요. 이미지·영상 자체는 분석하지 않습니다.</p></section>
+<section aria-label="앱으로 가져오기"><label for="appUrl">앱 주소</label><input id="appUrl" type="url" value="https://ml-cherry-wherewego.web.app" spellcheck="false">
+<div class="actions"><button id="send" type="button" disabled>목록을 앱으로 보내기</button><button id="copy" type="button" class="secondary" disabled>JSON 복사</button></div>
+<p class="hint">보내기를 눌러야 앱으로 넘어갑니다. 앱에서 확인 후 저장·AI 분류를 실행하세요. Instagram 비밀번호·로그인 쿠키는 읽거나 보내지 않습니다. 수집 목록은 이 창을 닫으면 지워집니다.</p></section>
+<script src="popup.js"></script></body></html>
