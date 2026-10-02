@@ -2,6 +2,20 @@
 
 인스타그램 개인 계정의 저장 게시물·릴스와 DM 공유 링크를 서버에 모아 카테고리별로 정리하는 앱입니다. 파일을 내려받아 가져오는 대신, **앱 안의 서버 브라우저에서 직접 인스타그램에 로그인**하고 열어 둔 화면을 수집합니다.
 
+## Firebase에 배포하기
+
+Firebase 프로젝트에 **Cloud Run 서버, Firestore, 비공개 Cloud Storage, Secret Manager, Firebase Hosting**을 구성할 수 있습니다. 브라우저가 필요한 앱이므로 Blaze(종량제) 결제가 연결된 프로젝트를 사용합니다.
+
+Google Cloud Shell에서 이 저장소를 내려받은 뒤 프로젝트 ID를 지정해 실행합니다:
+
+```bash
+git clone https://github.com/eunjikangi/Wherewego.git
+cd Wherewego
+bash deploy/firebase/deploy.sh --project YOUR_FIREBASE_PROJECT_ID
+```
+
+프로젝트 생성, 계정 연결, 관리자 암호 확인 방법은 [Firebase 배포 안내](deploy/firebase/README.md)를 참고하세요. 배포가 완료되면 출력되는 Firebase 주소에서 앱을 사용할 수 있습니다. 분류 결과는 Firestore에, 로그인 상태와 AI 설정은 비공개 버킷에 저장합니다. Firebase 주소는 전체 앱을 실행하는 Cloud Run 주소로 이동합니다.
+
 ## 바로 사용하기
 
 Docker와 Docker Compose를 설치한 Linux 서버 또는 Docker Desktop이 있는 PC에서 실행할 수 있습니다. 브라우저를 함께 실행하므로 서버는 메모리 4GB 이상을 권장합니다.
@@ -58,7 +72,7 @@ ssh -N -L 8000:127.0.0.1:8000 ubuntu@SERVER_IP
 
 API 키는 [OpenAI Platform](https://platform.openai.com/api-keys)에서 발급받습니다. ChatGPT 구독과 API 결제는 별개입니다. 연결 확인은 작은 샘플 요청을 한 번 보냅니다. AI 분류 시 게시물 설명·링크 주변 문맥이 OpenAI로 전송되며 API 사용료가 발생합니다.
 
-키는 이 서버의 데이터 볼륨에 저장되고 앱 응답·내보내기에는 포함하지 않습니다. API 키를 채팅이나 GitHub에 넣을 필요가 없습니다. UI 대신 `.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정하고 `docker compose up -d --force-recreate`로 다시 실행할 수도 있습니다.
+키는 Docker 실행 시 서버 데이터 볼륨에, Firebase 실행 시 비공개 Cloud Storage에 저장되고 앱 응답·내보내기에는 포함하지 않습니다. API 키를 채팅이나 GitHub에 넣을 필요가 없습니다. Docker에서는 UI 대신 `.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정하고 `docker compose up -d --force-recreate`로 다시 실행할 수도 있습니다.
 
 ## 수집·분류 범위
 
@@ -93,7 +107,7 @@ PUBLIC_ORIGIN=https://organizer.example.com
 
 ## 개발 및 검증
 
-Python 3.12, FastAPI, Playwright, SQLite, Chromium, noVNC로 구성합니다.
+Python 3.12, FastAPI, Playwright, Chromium, noVNC로 구성합니다. Docker 실행은 SQLite, Firebase 실행은 Firestore를 사용합니다.
 
 ```bash
 python3 -m venv .venv

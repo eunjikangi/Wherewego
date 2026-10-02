@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+import json
 import os
 import re
 from pathlib import Path
@@ -156,7 +157,11 @@ DETAIL_META_JS = r"""() => {
 
 
 class BrowserManager:
-    def __init__(self):
+    def __init__(self, restored_state=None):
+        self._restored_state = None
+        if restored_state is not None:
+            from .cloud_state import CloudState
+            self._restored_state = CloudState._browser_values(restored_state)
         self._playwright = None
         self._context = None
         self._page = None
@@ -193,12 +198,46 @@ class BrowserManager:
                 self._context = await self._playwright.chromium.launch_persistent_context(**kwargs)
                 self._context.on('close', self._context_closed)
                 self._page = self._context.pages[-1] if self._context.pages else await self._context.new_page()
+                if self._restored_state is not None:
+                    await self._context.add_cookies(self._restored_state['cookies'])
+                    # Only the initial user tab receives this script. Other tabs
+                    # share origin storage and must not revive an old snapshot
+                    # after the user clears storage or signs out.
+                    await self._page.add_init_script(self._storage_restore_script(self._restored_state['origins']))
+                    self._restored_state = None
                 if self._page.url in {'about:blank', ''}:
                     await self._page.goto('https://www.instagram.com/', wait_until='domcontentloaded', timeout=60000)
                 return self._page
             except Exception:
                 await self.close()
                 raise
+
+    @staticmethod
+    def _storage_restore_script(origins):
+        # JSON is passed as data, never evaluated as user-provided JavaScript.
+        values = json.dumps(origins, ensure_ascii=True, allow_nan=False)
+        return r"""(() => {
+          const origins = """ + values + r""";
+          const entry = origins.find(value => value.origin === location.origin);
+          if (!entry) return;
+          try {
+            const marker = '__organizer_restored_storage_v1';
+            if (sessionStorage.getItem(marker) === '1') return;
+            sessionStorage.setItem(marker, '1');
+            for (const item of entry.localStorage || []) {
+              // A current profile value takes precedence over the snapshot.
+              if (localStorage.getItem(item.name) === null) localStorage.setItem(item.name, item.value);
+            }
+          } catch (_) {
+            // Storage may be unavailable in opaque or browser-controlled frames.
+          }
+        })();"""
+
+    async def snapshot(self):
+        context = self._context
+        if context is None:
+            return None
+        return await context.storage_state()
 
     def _context_closed(self, *_):
         self._context = None

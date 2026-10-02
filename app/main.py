@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 
 import websockets
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -74,6 +75,29 @@ class ClassifyInput(BaseModel):
     only_pending: bool = False
 
 
+async def checkpoint_browser():
+    if app.state.cloud is None or not app.state.browser.ready:
+        return
+    async with app.state.checkpoint_lock:
+        try:
+            snapshot = await app.state.browser.snapshot()
+            if snapshot is not None:
+                await asyncio.to_thread(app.state.cloud.save_browser_state, snapshot)
+            app.state.session_warning = ""
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # Snapshot contents can contain authentication cookies: never log them.
+            logging.error("Cloud browser snapshot failed (%s)", type(error).__name__)
+            app.state.session_warning = "로그인 상태를 저장하지 못했습니다. 서버가 재시작되면 다시 로그인해야 할 수 있습니다."
+
+
+async def periodic_checkpoints():
+    while True:
+        await asyncio.sleep(30)
+        await checkpoint_browser()
+
+
 @asynccontextmanager
 async def lifespan(app):
     password = os.getenv("ADMIN_PASSWORD", "")
@@ -82,22 +106,59 @@ async def lifespan(app):
     directory = Path(os.getenv("DATA_DIR", "/data"))
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     app.state.password = password
-    app.state.store = Store(directory)
+    backend = os.getenv("STORE_BACKEND", "sqlite").lower()
+    bucket = os.getenv("ORGANIZER_STATE_BUCKET", "").strip()
+    if backend not in ("sqlite", "firestore"):
+        raise RuntimeError("STORE_BACKEND must be sqlite or firestore.")
+    if backend == "firestore" and not bucket:
+        raise RuntimeError("ORGANIZER_STATE_BUCKET is required with Firestore to persist login and AI settings.")
+    app.state.cloud = None
+    restored_state = None
+    if bucket:
+        from .cloud_state import CloudState
+        app.state.cloud = CloudState(bucket, directory)
+        await asyncio.to_thread(app.state.cloud.restore_ai_settings)
+        restored_state = await asyncio.to_thread(app.state.cloud.load_browser_state)
+    if backend == "firestore":
+        from .firestore_store import FirestoreStore
+        app.state.store = await asyncio.to_thread(
+            FirestoreStore, project_id=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
+            database=os.getenv("FIRESTORE_DATABASE", "(default)"))
+    else:
+        app.state.store = Store(directory)
     app.state.ai = AISettings(directory)
-    app.state.browser = BrowserManager()
+    app.state.browser = BrowserManager(restored_state=restored_state)
+    app.state.checkpoint_lock = asyncio.Lock()
+    app.state.session_warning = ""
     app.state.busy = False
     app.state.job = {"status": "idle", "message": "브라우저를 열고 인스타그램에 로그인하세요.", "added": 0, "updated": 0}
     app.state.task = None
     app.state.login_failures = []
-    yield
-    if app.state.task and not app.state.task.done():
-        app.state.task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await app.state.task
-    await app.state.browser.close()
+    checkpoint_task = asyncio.create_task(periodic_checkpoints()) if app.state.cloud else None
+    try:
+        yield
+    finally:
+        for task in (app.state.task, checkpoint_task):
+            if task and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        if app.state.cloud:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(checkpoint_browser(), timeout=8)
+        await app.state.browser.close()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, error):
+    # Pydantic's default errors echo input, which could expose submitted API keys.
+    return JSONResponse({"detail": [
+        {"type": item["type"], "loc": item["loc"], "msg": item["msg"]}
+        for item in error.errors()
+    ]}, status_code=422)
 
 
 @app.middleware("http")
@@ -176,9 +237,10 @@ async def script():
     return FileResponse(STATIC / "app.js", media_type="application/javascript")
 
 
-def status():
+async def status():
     return {"browser_ready": app.state.browser.ready, "busy": app.state.busy, "job": app.state.job,
-            "total": app.state.store.total(), "categories": CATEGORIES, "ai_available": bool(app.state.ai.key())}
+            "total": await asyncio.to_thread(app.state.store.total), "categories": CATEGORIES,
+            "ai_available": bool(app.state.ai.key()), "session_warning": app.state.session_warning}
 
 
 @app.get("/api/ai/config")
@@ -192,7 +254,21 @@ async def configure_ai(values: AIInput):
         raise HTTPException(409, "진행 중인 작업이 끝난 뒤 AI 설정을 변경하세요.")
     app.state.busy = True
     try:
-        return await app.state.ai.configure(values.api_key, values.model)
+        previous = app.state.ai.path.read_bytes() if app.state.ai.path.exists() else None
+        result = await app.state.ai.configure(values.api_key, values.model)
+        if app.state.cloud:
+            try:
+                await asyncio.to_thread(app.state.cloud.save_ai_settings)
+            except Exception as error:
+                logging.error("Cloud AI settings save failed (%s)", type(error).__name__)
+                if previous is None:
+                    app.state.ai.path.unlink(missing_ok=True)
+                else:
+                    app.state.ai.path.write_bytes(previous)
+                    app.state.ai.path.chmod(0o600)
+                app.state.ai = AISettings(app.state.ai.directory)
+                raise HTTPException(503, "AI 설정을 저장하지 못했습니다. 잠시 후 다시 연결해주세요.") from None
+        return result
     except ValueError as error:
         raise HTTPException(422, str(error))
     finally:
@@ -201,7 +277,7 @@ async def configure_ai(values: AIInput):
 
 @app.get("/api/status")
 async def get_status():
-    return status()
+    return await status()
 
 
 @app.post("/api/browser/start")
@@ -216,7 +292,7 @@ async def start_browser():
         raise HTTPException(503, "브라우저를 열지 못했습니다. 서버 실행 상태를 확인하세요.")
     finally:
         app.state.busy = False
-    return status()
+    return await status()
 
 
 async def run_collection(options):
@@ -229,7 +305,7 @@ async def run_collection(options):
             records = await app.state.browser.enrich(records, progress=progress)
         app.state.job["message"] = f"{len(records)}개 링크를 분류하고 있습니다."
         classified, warning = await classify_records(records, options.use_ai, api_key=app.state.ai.key(), model=app.state.ai.model())
-        added, updated = app.state.store.upsert(classified)
+        added, updated = await asyncio.to_thread(app.state.store.upsert, classified)
         message = f"새 항목 {added}개, 보완한 항목 {updated}개."
         if not records:
             message = "가져올 링크가 없습니다. 저장함 또는 DM 대화를 열고 게시물이 보이게 해주세요."
@@ -259,13 +335,14 @@ async def collect(options: CollectInput):
         raise HTTPException(409, "먼저 로그인 브라우저를 여세요.")
     app.state.busy = True
     app.state.task = asyncio.create_task(run_collection(options))
-    return status()
+    return await status()
 
 
 async def run_reclassification(options):
     app.state.job = {"status": "running", "message": "기존 항목을 AI로 다시 분류하고 있습니다.", "added": 0, "updated": 0}
     try:
-        records = [item for item in app.state.store.all()
+        stored = await asyncio.to_thread(app.state.store.all)
+        records = [item for item in stored
                    if item["classification"] != "manual" and (not options.only_pending or item["category"] == "분류 보류")]
         if app.state.browser.ready:
             async def progress(message):
@@ -275,7 +352,7 @@ async def run_reclassification(options):
             updates = {item["id"]: item for item in enriched}
             records = [updates.get(item["id"], item) for item in records]
         classified, warning = await classify_records(records, use_ai=True, api_key=app.state.ai.key(), model=app.state.ai.model())
-        updated = app.state.store.reclassify(classified)
+        updated = await asyncio.to_thread(app.state.store.reclassify, classified)
         message = f"{updated}개 항목을 AI로 다시 분류했습니다. 직접 수정한 카테고리는 유지했습니다."
         if warning:
             message += " " + warning
@@ -299,19 +376,19 @@ async def reclassify(options: ClassifyInput):
         raise HTTPException(422, "먼저 AI 설정에서 API 키를 연결하세요.")
     app.state.busy = True
     app.state.task = asyncio.create_task(run_reclassification(options))
-    return status()
+    return await status()
 
 
 @app.get("/api/items")
 async def items(q: str = "", category: str = "", source: str = ""):
-    return {"items": app.state.store.all(q[:300], category, source)}
+    return {"items": await asyncio.to_thread(app.state.store.all, q[:300], category, source)}
 
 
 @app.patch("/api/items/{item_id}")
 async def edit(item_id: str, values: EditInput):
     if values.category not in CATEGORIES:
         raise HTTPException(422, "카테고리를 확인하세요.")
-    result = app.state.store.update(item_id, values.category, values.note)
+    result = await asyncio.to_thread(app.state.store.update, item_id, values.category, values.note)
     if not result:
         raise HTTPException(404, "항목을 찾지 못했습니다.")
     return result
@@ -319,7 +396,7 @@ async def edit(item_id: str, values: EditInput):
 
 @app.get("/api/export")
 async def export():
-    data = {"format": "instagram-organizer-v1", "items": app.state.store.all()}
+    data = {"format": "instagram-organizer-v1", "items": await asyncio.to_thread(app.state.store.all)}
     return Response(json.dumps(data, ensure_ascii=False, indent=2), media_type="application/json", headers={"Content-Disposition": 'attachment; filename="instagram-library.json"'})
 
 

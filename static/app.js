@@ -315,6 +315,7 @@
       const status = await request("/api/status");
       if (requestId !== state.statusRequestId) return;
       const totalChanged = state.status && status.total !== state.status.total;
+      if (status.session_warning && status.session_warning !== state.status?.session_warning) toast(status.session_warning, true);
       state.status = status;
       state.statusFailed = false;
       updateControls();
