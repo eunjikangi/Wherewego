@@ -5,3 +5,5 @@ __pycache__
 *.pyc
 .venv
 tests
+.firebase
+firebase-debug*.log

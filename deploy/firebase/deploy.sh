@@ -107,11 +107,37 @@ ensure_service_account() {
 }
 ensure_service_account "$RUNTIME_SA_NAME" "$RUNTIME_SA"
 ensure_service_account "$BUILD_SA_NAME" "$BUILD_SA"
-gc projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" \
-  --role=roles/datastore.user --condition=None > /dev/null
+# Newly created service accounts can take a short time to become visible to
+# project IAM. Retry that exact propagation error; preserve other failures.
+bind_project_role() {
+  local email=$1 role=$2 index=0 status
+  local error_file="$WORK_DIR/project-iam-error"
+  local -a waits=(2 4 8 16 30)
+  while true; do
+    if gc projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$email" \
+      --role="$role" --condition=None > /dev/null 2> "$error_file"; then
+      return 0
+    else
+      status=$?
+    fi
+    if ((index >= ${#waits[@]})) || ! python3 - "$error_file" "$email" <<'PY'
+import pathlib, re, sys
+message = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
+pattern = r'INVALID_ARGUMENT:\s+Service account\s+' + re.escape(sys.argv[2]) + r'\s+does not exist(?:[.\s]|$)'
+sys.exit(0 if re.search(pattern, message) else 1)
+PY
+    then
+      cat "$error_file" >&2
+      return "$status"
+    fi
+    printf 'Waiting %s seconds for new service-account visibility…\n' "${waits[index]}" >&2
+    sleep "${waits[index]}"
+    index=$((index + 1))
+  done
+}
+bind_project_role "$RUNTIME_SA" roles/datastore.user
 # Dedicated source-build identity avoids relying on an Editor-enabled default SA.
-gc projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" \
-  --role=roles/run.builder --condition=None > /dev/null
+bind_project_role "$BUILD_SA" roles/run.builder
 
 gc firestore databases list --format=json > "$WORK_DIR/databases.json"
 DB_TYPE=$(python3 - "$WORK_DIR/databases.json" "$DATABASE_ID" <<'PY'
@@ -132,9 +158,9 @@ elif [[ "$DB_TYPE" != 'FIRESTORE_NATIVE' ]]; then
 fi
 # Existing Firestore databases, their rules and other applications' collections are not replaced.
 
-if ! gc storage buckets describe "gs://$BUCKET" --format=json > "$WORK_DIR/bucket.json" 2> "$WORK_DIR/bucket-error"; then
+if ! gc storage buckets describe "gs://$BUCKET" --raw --format=json > "$WORK_DIR/bucket.json" 2> "$WORK_DIR/bucket-error"; then
   gc storage buckets create "gs://$BUCKET" --location="$REGION" --uniform-bucket-level-access --public-access-prevention
-  gc storage buckets describe "gs://$BUCKET" --format=json > "$WORK_DIR/bucket.json"
+  gc storage buckets describe "gs://$BUCKET" --raw --format=json > "$WORK_DIR/bucket.json"
 fi
 python3 - "$WORK_DIR/bucket.json" "$WORK_DIR/project.json" <<'PY'
 import json, sys
