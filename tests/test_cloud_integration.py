@@ -138,6 +138,7 @@ class CloudIntegrationTests(unittest.IsolatedAsyncioTestCase):
                        "STORE_BACKEND": "firestore", "ORGANIZER_STATE_BUCKET": bucket,
                        "GOOGLE_CLOUD_PROJECT": "fixture-project", "FIRESTORE_DATABASE": "fixture-database",
                        "OPENAI_API_KEY": "", "OPENAI_MODEL": "gpt-4.1-mini",
+                       "AI_PROVIDER": "openai", "GEMINI_API_KEY": "", "GEMINI_MODEL": "gemini-flash-latest",
                        "PUBLIC_ORIGIN": "http://testserver", "COOKIE_SECURE": "0"}
         with patch.dict(os.environ, environment), \
                 patch("app.cloud_state.CloudState", return_value=self.cloud) as cloud_class, \
@@ -173,7 +174,8 @@ class CloudIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.browser.restored_state, STATE)
             await self.login(client)
             response = await client.get("/api/ai/config")
-            self.assertEqual(response.json(), {"configured": True, "model": AI["model"], "source": "app"})
+            self.assertEqual(response.json(), {"configured": True, "model": AI["model"], "source": "app", "provider": "openai"})
+            self.assertEqual(json.loads(main.app.state.ai.path.read_text()), AI)
             self.assertNotIn(AI["api_key"], response.text)
         self.assertTrue(self.browser.closed)
 
@@ -223,9 +225,57 @@ class CloudIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 response = await client.put("/api/ai/config", json={"api_key": new_key, "model": "gpt-4.1-mini"}, headers={"Origin": "http://testserver"})
             self.assertEqual(response.status_code, 200)
             self.assertNotIn(new_key, response.text)
-            self.assertEqual(self.cloud.saved_ai, [{"api_key": new_key, "model": "gpt-4.1-mini"}])
+            self.assertEqual(self.cloud.saved_ai, [{"api_key": new_key, "model": "gpt-4.1-mini", "provider": "openai"}])
+            self.assertEqual(response.json()["provider"], "openai")
+            self.assertEqual(classify.await_args.kwargs["provider"], "openai")
             self.assertEqual(classify.await_args.kwargs["api_key"], new_key)
             self.assertEqual(main.app.state.ai.key(), new_key)
+            self.assertFalse(main.app.state.busy)
+
+    async def test_gemini_settings_restore_and_new_configuration_persist_provider(self):
+        restored = {"api_key": "restored-private-gemini-key", "model": "gemini-flash-latest", "provider": "gemini"}
+        new_key = "new-private-gemini-key"
+        async with self.application(restored_ai=restored) as client:
+            await self.login(client)
+            response = await client.get("/api/ai/config")
+            self.assertEqual(response.json(), {"configured": True, "model": restored["model"], "source": "app", "provider": "gemini"})
+            self.assertNotIn(restored["api_key"], response.text)
+            self.assertEqual(main.app.state.ai.key(), restored["api_key"])
+            with patch("app.ai.classify_records", new=AsyncMock(return_value=self.classification_result())) as classify:
+                response = await client.put(
+                    "/api/ai/config",
+                    json={"api_key": new_key, "model": "models/gemini-2.5-flash", "provider": "gemini"},
+                    headers={"Origin": "http://testserver"},
+                )
+            expected = {"api_key": new_key, "model": "gemini-2.5-flash", "provider": "gemini"}
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"configured": True, "model": expected["model"], "source": "app", "provider": "gemini"})
+            self.assertNotIn(new_key, response.text)
+            self.assertEqual(self.cloud.saved_ai, [expected])
+            self.assertEqual(json.loads(main.app.state.ai.path.read_text()), expected)
+            self.assertEqual(classify.await_args.kwargs["provider"], "gemini")
+            self.assertEqual(classify.await_args.kwargs["api_key"], new_key)
+            self.assertEqual(classify.await_args.kwargs["model"], expected["model"])
+            self.assertFalse(main.app.state.busy)
+
+    async def test_cloud_ai_save_failure_restores_gemini_provider_after_switch(self):
+        restored = {"api_key": "restored-private-gemini-key", "model": "gemini-flash-latest", "provider": "gemini"}
+        async with self.application(restored_ai=restored) as client:
+            await self.login(client)
+            previous = main.app.state.ai.path.read_bytes()
+            self.cloud.ai_error = RuntimeError(ERROR_SECRET)
+            with self.assertLogs(level="ERROR"), patch("app.ai.classify_records", new=AsyncMock(return_value=self.classification_result())):
+                response = await client.put(
+                    "/api/ai/config",
+                    json={"api_key": "new-private-openai-key", "model": "gpt-4.1-mini", "provider": "openai"},
+                    headers={"Origin": "http://testserver"},
+                )
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(main.app.state.ai.path.read_bytes(), previous)
+            self.assertEqual(main.app.state.ai.key(), restored["api_key"])
+            self.assertEqual(main.app.state.ai.public(), {"configured": True, "model": restored["model"], "source": "app", "provider": "gemini"})
+            self.assertNotIn(ERROR_SECRET, response.text)
+            self.assertEqual(self.cloud.saved_ai, [])
             self.assertFalse(main.app.state.busy)
 
     async def test_cloud_ai_save_failure_restores_previous_settings_and_hides_secret(self):

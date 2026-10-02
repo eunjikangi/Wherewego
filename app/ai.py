@@ -3,15 +3,13 @@
 import contextlib
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 
-from .classifier import classify_records
+from .classifier import DEFAULT_MODELS, MODEL_PATTERN, classify_records, normalize_model, normalize_provider
 
 
-DEFAULT_MODEL = "gpt-4.1-mini"
-MODEL_PATTERN = re.compile(r"[A-Za-z0-9._:/-]{1,80}\Z")
+DEFAULT_MODEL = DEFAULT_MODELS["openai"]
 
 
 class AISettings:
@@ -22,10 +20,11 @@ class AISettings:
         self._stored = None
         try:
             values = json.loads(self.path.read_text(encoding="utf-8"))
+            provider = normalize_provider(values.get("provider", "openai"))
             api_key = self._validate_key(values.get("api_key"))
-            model = self._validate_model(values.get("model"))
+            model = self._validate_model(values.get("model"), provider)
             self.path.chmod(0o600)
-            self._stored = {"api_key": api_key, "model": model}
+            self._stored = {"provider": provider, "api_key": api_key, "model": model}
         except (OSError, ValueError, TypeError, AttributeError):
             # A missing or invalid local setting leaves environment configuration usable.
             pass
@@ -33,47 +32,59 @@ class AISettings:
     @staticmethod
     def _validate_key(value):
         if not isinstance(value, str):
-            raise ValueError("OpenAI API 키를 입력해주세요.")
+            raise ValueError("AI API 키를 입력해주세요.")
         key = value.strip()
         if not key or len(key) > 512 or not key.isascii() or any(character.isspace() or not character.isprintable() for character in key):
-            raise ValueError("OpenAI API 키 형식을 확인해주세요.")
+            raise ValueError("AI API 키 형식을 확인해주세요.")
         return key
 
     @staticmethod
-    def _validate_model(value):
-        if not isinstance(value, str) or not MODEL_PATTERN.fullmatch(value.strip()):
-            raise ValueError("모델 이름은 영문, 숫자, 점, 콜론, 밑줄, 하이픈, 슬래시로 80자 이내로 입력해주세요.")
-        return value.strip()
+    def _validate_model(value, provider="openai"):
+        return normalize_model(value, provider)
+
+    def provider(self):
+        if self._stored:
+            return self._stored["provider"]
+        try:
+            return normalize_provider(os.getenv("AI_PROVIDER", "openai"))
+        except ValueError:
+            return "openai"
 
     def key(self):
         if self._stored:
             return self._stored["api_key"]
-        return os.getenv("OPENAI_API_KEY", "").strip()
+        return os.getenv(f"{self.provider().upper()}_API_KEY", "").strip()
 
     def model(self):
         if self._stored:
             return self._stored["model"]
-        model = os.getenv("OPENAI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-        return model if MODEL_PATTERN.fullmatch(model) else DEFAULT_MODEL
+        provider = self.provider()
+        model = os.getenv(f"{provider.upper()}_MODEL", "").strip() or DEFAULT_MODELS[provider]
+        try:
+            return self._validate_model(model, provider)
+        except ValueError:
+            return DEFAULT_MODELS[provider]
 
     def public(self):
         configured = bool(self.key())
         source = "app" if self._stored else "environment" if configured else "none"
-        return {"configured": configured, "model": self.model(), "source": source}
+        return {"configured": configured, "provider": self.provider(), "model": self.model(), "source": source}
 
-    async def configure(self, api_key: str, model: str):
+    async def configure(self, api_key: str, model: str = None, provider: str = "openai"):
+        provider = normalize_provider(provider)
         api_key = self._validate_key(api_key)
-        model = self._validate_model(model)
+        model = self._validate_model(DEFAULT_MODELS[provider] if model is None else model, provider)
         records, warning = await classify_records(
             [{"title": "커피를 마시는 카페", "text": "", "url": ""}],
             use_ai=True,
             api_key=api_key,
             model=model,
+            provider=provider,
         )
         if warning or not records or records[0].get("classification") != "ai" or records[0].get("category") != "카페":
             raise ValueError("AI 연결을 확인하지 못했습니다. API 키, 모델 사용 권한, 결제 설정을 확인해주세요.")
 
-        values = {"api_key": api_key, "model": model}
+        values = {"provider": provider, "api_key": api_key, "model": model}
         temporary_path = None
         try:
             descriptor, temporary_path = tempfile.mkstemp(prefix=".ai-settings-", dir=self.directory)

@@ -10,6 +10,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs
 
 import websockets
@@ -68,7 +69,8 @@ class EditInput(BaseModel):
 
 class AIInput(BaseModel):
     api_key: str = Field(min_length=1, max_length=1024)
-    model: str = Field(default="gpt-4.1-mini", max_length=80)
+    model: str | None = Field(default=None, max_length=80)
+    provider: Literal["openai", "gemini"] = "openai"
 
 
 class ClassifyInput(BaseModel):
@@ -255,7 +257,7 @@ async def configure_ai(values: AIInput):
     app.state.busy = True
     try:
         previous = app.state.ai.path.read_bytes() if app.state.ai.path.exists() else None
-        result = await app.state.ai.configure(values.api_key, values.model)
+        result = await app.state.ai.configure(values.api_key, values.model, provider=values.provider)
         if app.state.cloud:
             try:
                 await asyncio.to_thread(app.state.cloud.save_ai_settings)
@@ -304,7 +306,7 @@ async def run_collection(options):
         if options.use_ai and records:
             records = await app.state.browser.enrich(records, progress=progress)
         app.state.job["message"] = f"{len(records)}개 링크를 분류하고 있습니다."
-        classified, warning = await classify_records(records, options.use_ai, api_key=app.state.ai.key(), model=app.state.ai.model())
+        classified, warning = await classify_records(records, options.use_ai, api_key=app.state.ai.key(), model=app.state.ai.model(), provider=app.state.ai.provider())
         added, updated = await asyncio.to_thread(app.state.store.upsert, classified)
         message = f"새 항목 {added}개, 보완한 항목 {updated}개."
         if not records:
@@ -351,7 +353,7 @@ async def run_reclassification(options):
             enriched = await app.state.browser.enrich(pending, progress=progress)
             updates = {item["id"]: item for item in enriched}
             records = [updates.get(item["id"], item) for item in records]
-        classified, warning = await classify_records(records, use_ai=True, api_key=app.state.ai.key(), model=app.state.ai.model())
+        classified, warning = await classify_records(records, use_ai=True, api_key=app.state.ai.key(), model=app.state.ai.model(), provider=app.state.ai.provider())
         updated = await asyncio.to_thread(app.state.store.reclassify, classified)
         message = f"{updated}개 항목을 AI로 다시 분류했습니다. 직접 수정한 카테고리는 유지했습니다."
         if warning:

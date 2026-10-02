@@ -114,6 +114,52 @@ class CloudStateTests(unittest.TestCase):
         })
         self.assertEqual(self.client.names, ['existing-private-bucket', 'existing-private-bucket'])
 
+    def test_provider_settings_round_trip_and_normalize_gemini_model_prefix(self):
+        settings = (
+            ({**AI, 'provider': 'openai'}, AI['model']),
+            ({'api_key': 'fixture-gemini-key', 'model': 'gemini-flash-latest', 'provider': 'gemini'}, 'gemini-flash-latest'),
+            ({'api_key': 'fixture-gemini-key', 'model': 'models/gemini-2.5-flash', 'provider': 'gemini'}, 'gemini-2.5-flash'),
+        )
+        for values, canonical_model in settings:
+            with self.subTest(provider=values['provider'], model=values['model']):
+                expected = {**values, 'model': canonical_model}
+                self.path.write_text(json.dumps(values))
+                self.state.save_ai_settings()
+                uploaded = self.client.storage.objects['instagram-organizer/ai-settings.json'][0]
+                self.assertEqual(json.loads(uploaded), expected)
+                reloaded = CloudState('existing-private-bucket', self.temporary.name, client=self.client)
+                self.assertEqual(reloaded.restore_ai_settings(), expected)
+                self.assertEqual(json.loads(self.path.read_text()), expected)
+                self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+
+    def test_invalid_provider_model_or_key_cannot_restore_or_overwrite_settings(self):
+        secret = 'private-invalid-setting-fixture'
+        invalid_settings = (
+            {'api_key': secret, 'model': 'gemini-flash-latest', 'provider': secret},
+            {'api_key': secret, 'model': 'gemini-flash-latest', 'provider': [secret]},
+            {'api_key': secret + '\nsecond-line', 'model': 'gemini-flash-latest', 'provider': 'gemini'},
+            {'api_key': {'key': secret}, 'model': 'gemini-flash-latest', 'provider': 'gemini'},
+            {'api_key': secret, 'model': 'models/gemini-flash-latest:generateContent', 'provider': 'gemini'},
+            {'api_key': secret, 'model': '../' + secret, 'provider': 'gemini'},
+            {'api_key': secret, 'model': 'gemini-flash-latest', 'provider': 'gemini', 'extra': secret},
+        )
+        for values in invalid_settings:
+            with self.subTest(fields=sorted(values)):
+                self.path.write_text(json.dumps(AI))
+                self.client.storage.put('ai-settings.json', values)
+                with self.assertRaises(ValueError) as error:
+                    self.state.restore_ai_settings()
+                self.assertNotIn(secret, str(error.exception))
+                self.assertEqual(json.loads(self.path.read_text()), AI)
+                self.client.storage.put('ai-settings.json', AI)
+                self.path.write_text(json.dumps(values))
+                with self.assertRaises(ValueError) as error:
+                    self.state.save_ai_settings()
+                self.assertNotIn(secret, str(error.exception))
+                uploaded, generation = self.client.storage.objects['instagram-organizer/ai-settings.json']
+                self.assertEqual(json.loads(uploaded), AI)
+                self.assertEqual(generation, 1)
+
     def test_stale_writer_does_not_overwrite_newer_browser_snapshot(self):
         self.client.storage.put('browser-state.json', STATE)
         stale = CloudState('existing-private-bucket', self.temporary.name, client=self.client)

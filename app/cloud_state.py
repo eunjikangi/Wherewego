@@ -7,10 +7,11 @@ mounted or uploaded. Call these synchronous methods with asyncio.to_thread.
 import contextlib
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from .classifier import normalize_model, normalize_provider
 
 try:
     from google.api_core.exceptions import NotFound
@@ -78,7 +79,8 @@ class CloudState:
     @staticmethod
     def _ai_values(values):
         message = '클라우드 AI 설정 형식이 올바르지 않습니다.'
-        if not isinstance(values, dict) or set(values) != {'api_key', 'model'}:
+        if (not isinstance(values, dict)
+                or set(values) not in ({'api_key', 'model'}, {'api_key', 'model', 'provider'})):
             raise ValueError(message)
         key, model = values['api_key'], values['model']
         if not isinstance(key, str) or not isinstance(model, str):
@@ -86,9 +88,20 @@ class CloudState:
         key, model = key.strip(), model.strip()
         if (not key or len(key) > 512 or not key.isascii()
                 or any(c.isspace() or not c.isprintable() for c in key)
-                or not re.fullmatch(r'[A-Za-z0-9._:/-]{1,80}', model)):
+                or not model):
             raise ValueError(message)
-        return {'api_key': key, 'model': model}
+        provider = values.get('provider', 'openai')
+        if not isinstance(provider, str) or provider not in {'openai', 'gemini'}:
+            raise ValueError(message)
+        try:
+            model = normalize_model(model, normalize_provider(provider))
+        except (ValueError, TypeError):
+            raise ValueError(message) from None
+        result = {'api_key': key, 'model': model}
+        # Legacy snapshots stay two-field settings and imply OpenAI.
+        if 'provider' in values:
+            result['provider'] = provider
+        return result
 
     @staticmethod
     def _browser_values(values):

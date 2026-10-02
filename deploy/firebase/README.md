@@ -81,6 +81,8 @@ bash deploy/firebase/cloudshell.sh
 
 기존 이미지 `asia-northeast3-docker.pkg.dev/ml-cherry/cloud-run-source-deploy/instagram-organizer:latest`를 조회하고 새 빌드를 건너뜁니다. 이미지가 없으면 배포를 시작하기 전에 오류로 중단합니다. 선택 프로젝트의 전용 Hosting 사이트 소유권을 확인한 후 앱 주소로 이동하는 설정만 배포합니다.
 
+앱 코드를 갱신한 뒤 새 이미지부터 배포하려면 저장소 루트에서 `git pull --ff-only` 후 `bash deploy/firebase/cloudshell.sh --build`를 실행합니다. `--build`는 현재 소스 전체를 Cloud Build로 빌드한 다음 Cloud Run에 배포합니다.
+
 일반 스크립트에서도 `--image IMAGE`를 지정하면 해당 프로젝트·지역의 `cloud-run-source-deploy/instagram-organizer` 이미지(tag 또는 sha256 digest)를 재사용합니다. 이 경우 `--check`는 이미지 조회까지 수행합니다. 옵션이 없으면 기존 Cloud Build 흐름을 사용합니다.
 
 ## 관리자 암호와 첫 사용
@@ -99,7 +101,7 @@ gcloud secrets versions access latest \
   --out-file="$HOME/.local/state/wherewego/admin-password"
 ```
 
-배포가 끝나면 터미널에 실제 Cloud Run URL과 Firebase 진입 URL이 표시됩니다. 앱 관리자 암호로 로그인한 다음, **로그인 브라우저 열기**에서 Instagram에 직접 로그인하세요. 저장함이나 원하는 DM을 열어 수집하고, **AI 설정**에서 OpenAI API를 연결할 수 있습니다. OpenAI 키와 인스타그램 로그인 상태는 비공개 버킷에 저장되므로 버킷 접근 권한도 계정 정보처럼 관리하세요.
+배포가 끝나면 터미널에 실제 Cloud Run URL과 Firebase 진입 URL이 표시됩니다. 앱 관리자 암호로 로그인한 다음, **로그인 브라우저 열기**에서 Instagram에 직접 로그인하세요. 저장함이나 원하는 DM을 열어 수집하고, **AI 설정**에서 Gemini 또는 OpenAI API를 연결할 수 있습니다. AI API 키와 인스타그램 로그인 상태는 비공개 버킷에 저장되므로 버킷 접근 권한도 계정 정보처럼 관리하세요.
 
 Firebase 설정과 이동 페이지는 배포 완료 후 받은 실제 Cloud Run URL로 임시 디렉터리에 생성됩니다. 저장소에 가짜 목적지 URL을 넣거나 기존 Firebase 규칙을 배포하지 않습니다. 선택한 Hosting 사이트가 없으면 생성하며 해당 사이트를 명시적으로 배포 대상으로 지정합니다. 진입 URL은 `SITE_ID.web.app`입니다. 선택한 사이트에서 다른 앱을 운영 중이라면 `--site`로 새 이름을 지정하세요.
 

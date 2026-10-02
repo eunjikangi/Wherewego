@@ -19,13 +19,13 @@ def response_for(items):
 
 class AISettingsTests(unittest.IsolatedAsyncioTestCase):
     async def test_validated_setting_reload_and_private_key(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENAI_API_KEY": "", "AI_PROVIDER": "openai"}):
             settings = AISettings(directory)
             self.assertFalse(settings.public()["configured"])
             with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=response_for([{"id": 0, "category": "카페"}]))) as request:
                 public = await settings.configure("fake-test-api-key", "gpt-4.1-mini")
                 self.assertEqual(request.call_args.kwargs["json"]["model"], "gpt-4.1-mini")
-            self.assertEqual(public, {"configured": True, "model": "gpt-4.1-mini", "source": "app"})
+            self.assertEqual(public, {"configured": True, "provider": "openai", "model": "gpt-4.1-mini", "source": "app"})
             self.assertNotIn("fake-test-api-key", json.dumps(public))
             self.assertEqual(stat.S_IMODE(settings.path.stat().st_mode), 0o600)
             reloaded = AISettings(directory)

@@ -14,6 +14,8 @@
     configSaving: false,
     aiPreference: null,
     aiConfig: null,
+    aiEditorProvider: "gemini",
+    aiEditorModels: {},
     requestId: 0,
     statusRequestId: 0,
     pollTimer: null,
@@ -26,6 +28,7 @@
   const sourceNames = { saved: "저장함", dm: "DM 공유", post: "게시물", current: "현재 화면", unknown: "현재 화면" };
   const classificationNames = { rules: "키워드 분류", ai: "AI 분류", manual: "직접 분류", pending: "분류 보류" };
   const defaultCategories = ["맛집", "카페", "여행", "쇼핑·패션", "뷰티", "집·인테리어", "운동·건강", "공부·업무", "문화·취미", "분류 보류"];
+  const aiProviders = { gemini: { name: "Gemini", model: "gemini-flash-latest" }, openai: { name: "OpenAI", model: "gpt-4.1-mini" } };
   const browserUrl = "/browser/vnc.html?autoconnect=true&resize=scale&path=browser/websockify";
 
   function node(tag, className, content) {
@@ -404,9 +407,16 @@
   async function loadAiConfig() {
     try {
       const config = await request("/api/ai/config");
-      state.aiConfig = { configured: Boolean(config.configured), model: config.model, source: config.source };
-      if (!state.configSaving) byId("ai-model").value = config.model || "gpt-4.1-mini";
-      byId("ai-config-status").textContent = config.configured ? `AI가 연결되어 있습니다. 모델: ${config.model || "gpt-4.1-mini"}${config.source === "env" || config.source === "environment" ? " · 서버 환경 변수에서 설정됨" : ""}` : "아직 연결된 API 키가 없습니다.";
+      const provider = Object.hasOwn(aiProviders, config.provider) ? config.provider : "openai";
+      const model = config.model || aiProviders[provider].model;
+      state.aiConfig = { configured: Boolean(config.configured), provider, model, source: config.source };
+      if (!state.configSaving) {
+        byId("ai-provider").value = provider;
+        byId("ai-model").value = model;
+        state.aiEditorProvider = provider;
+        state.aiEditorModels[provider] = model;
+      }
+      byId("ai-config-status").textContent = config.configured ? `${aiProviders[provider].name} API가 연결되어 있습니다. 모델: ${model}${config.source === "env" || config.source === "environment" ? " · 서버 환경 변수에서 설정됨" : ""}` : `아직 연결된 ${aiProviders[provider].name} API 키가 없습니다.`;
       byId("ai-api-key").placeholder = config.configured ? "변경할 API 키를 입력하세요" : "API 키를 입력하세요";
     } catch (error) {
       byId("ai-config-status").textContent = "설정 상태를 불러오지 못했습니다. 다시 열어 확인해 주세요.";
@@ -431,18 +441,27 @@
   byId("ai-settings-cancel").addEventListener("click", closeAiSettings);
   byId("ai-settings-dialog").addEventListener("close", () => { byId("ai-api-key").value = ""; });
   byId("ai-settings-dialog").addEventListener("cancel", (event) => { if (state.configSaving) event.preventDefault(); });
+  byId("ai-provider").addEventListener("change", () => {
+    const currentModel = byId("ai-model").value.trim();
+    if (currentModel) state.aiEditorModels[state.aiEditorProvider] = currentModel;
+    const provider = byId("ai-provider").value;
+    if (!Object.hasOwn(aiProviders, provider)) return;
+    state.aiEditorProvider = provider;
+    byId("ai-model").value = state.aiEditorModels[provider] || aiProviders[provider].model;
+  });
   byId("ai-settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (state.configSaving) return;
     const keyInput = byId("ai-api-key");
     const model = byId("ai-model").value.trim();
-    if (!keyInput.value.trim() || !model) return;
+    const provider = byId("ai-provider").value;
+    if (!keyInput.value.trim() || !model || !Object.hasOwn(aiProviders, provider)) return;
     state.configSaving = true;
     byId("ai-settings-error").hidden = true;
-    for (const id of ["ai-settings-save", "ai-settings-close", "ai-settings-cancel", "ai-api-key", "ai-model"]) byId(id).disabled = true;
+    for (const id of ["ai-settings-save", "ai-settings-close", "ai-settings-cancel", "ai-api-key", "ai-model", "ai-provider"]) byId(id).disabled = true;
     byId("ai-settings-save").textContent = "연결 확인 중";
     try {
-      await request("/api/ai/config", { method: "PUT", body: JSON.stringify({ api_key: keyInput.value.trim(), model }) });
+      await request("/api/ai/config", { method: "PUT", body: JSON.stringify({ api_key: keyInput.value.trim(), model, provider }) });
       keyInput.value = "";
       await Promise.all([loadAiConfig(), refreshStatus()]);
       toast("AI API를 연결했습니다.");
@@ -453,7 +472,7 @@
     } finally {
       keyInput.value = "";
       state.configSaving = false;
-      for (const id of ["ai-settings-save", "ai-settings-close", "ai-settings-cancel", "ai-api-key", "ai-model"]) byId(id).disabled = false;
+      for (const id of ["ai-settings-save", "ai-settings-close", "ai-settings-cancel", "ai-api-key", "ai-model", "ai-provider"]) byId(id).disabled = false;
       byId("ai-settings-save").textContent = "연결 확인 · 저장";
     }
   });

@@ -102,10 +102,11 @@
     <dialog id="ai-settings-dialog" class="settings-dialog" aria-labelledby="ai-settings-title">
       <form id="ai-settings-form">
         <div class="settings-heading"><div><div class="eyebrow">AI CONNECTION</div><h2 id="ai-settings-title">AI 설정</h2></div><button id="ai-settings-close" class="dialog-close" type="button" aria-label="AI 설정 닫기">×</button></div>
-        <p class="settings-description">OpenAI API를 연결하면 모아 둔 자료를 AI로 분류할 수 있어요.</p>
+        <p class="settings-description">Gemini 또는 OpenAI API를 연결하면 모아 둔 자료를 AI로 분류할 수 있어요.</p>
         <p id="ai-config-status" class="config-status" role="status">연결 상태를 확인하고 있습니다.</p>
+        <label class="field-label settings-field">AI 제공자<select id="ai-provider" class="editor-input"><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select></label>
         <label class="field-label settings-field">API 키<input id="ai-api-key" class="editor-input" type="password" placeholder="API 키를 입력하세요" autocomplete="off" spellcheck="false" required /></label>
-        <label class="field-label settings-field">모델<input id="ai-model" class="editor-input" type="text" value="gpt-4.1-mini" autocomplete="off" spellcheck="false" maxlength="120" required /></label>
+        <label class="field-label settings-field">모델<input id="ai-model" class="editor-input" type="text" value="gemini-flash-latest" autocomplete="off" spellcheck="false" maxlength="80" required /></label>
         <p class="settings-notice">API 키는 이 서버에 저장됩니다. AI 분류에는 게시물 설명과 링크 주변 문맥을 전송합니다. API 사용료가 발생합니다.</p>
         <p id="ai-settings-error" class="settings-error" role="alert" hidden></p>
         <div class="settings-actions"><button id="ai-settings-cancel" class="button button-outline" type="button">닫기</button><button id="ai-settings-save" class="button button-primary" type="submit">연결 확인 · 저장</button></div>

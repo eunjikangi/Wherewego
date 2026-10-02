@@ -26,4 +26,4 @@ bash deploy/firebase/cloudshell.sh --check
 
 https://console.cloud.google.com/security/secret-manager/secret/instagram-organizer-admin-password/versions?project=ml-cherry
 
-앱에서 관리자 암호로 로그인합니다. **로그인 브라우저 열기**에서 Instagram에 직접 로그인하고, 저장함 또는 원하는 DM을 연 뒤 수집합니다. **AI 설정**에는 사용자의 OpenAI API 키를 입력합니다.
+앱에서 관리자 암호로 로그인합니다. **로그인 브라우저 열기**에서 Instagram에 직접 로그인하고, 저장함 또는 원하는 DM을 연 뒤 수집합니다. **AI 설정**에서는 Gemini 또는 OpenAI를 선택하고 해당 API 키를 입력합니다.

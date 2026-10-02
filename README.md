@@ -66,13 +66,13 @@ ssh -N -L 8000:127.0.0.1:8000 ubuntu@SERVER_IP
 1. `.env`의 관리자 암호로 앱에 접속합니다.
 2. **로그인 브라우저 열기**를 누릅니다. 앱에 표시된 Instagram 화면에서 직접 로그인합니다. 추가 인증이 나오면 같은 화면에서 처리합니다.
 3. Instagram의 **저장됨** 또는 수집하려는 **DM 대화**를 엽니다. DM 목록만 열린 상태에서는 수집하지 않습니다.
-4. 앱의 **AI 설정**에서 OpenAI API 키와 모델을 입력하고 **연결 확인·저장**을 누릅니다. 기본 모델은 `gpt-4.1-mini`입니다.
+4. 앱의 **AI 설정**에서 Gemini 또는 OpenAI를 선택하고 API 키와 모델을 입력한 뒤 **연결 확인·저장**을 누릅니다. 기본 모델은 Gemini `gemini-flash-latest`, OpenAI `gpt-4.1-mini`입니다.
 5. **AI 분류**가 켜진 상태에서 **현재 화면 수집** 또는 **스크롤하며 수집**을 누릅니다.
 6. 분류 결과를 확인하고 필요하면 **분류 수정**으로 카테고리와 메모를 바꿉니다. 이미 모은 항목은 **AI로 다시 분류**할 수 있습니다.
 
-API 키는 [OpenAI Platform](https://platform.openai.com/api-keys)에서 발급받습니다. ChatGPT 구독과 API 결제는 별개입니다. 연결 확인은 작은 샘플 요청을 한 번 보냅니다. AI 분류 시 게시물 설명·링크 주변 문맥이 OpenAI로 전송되며 API 사용료가 발생합니다.
+API 키는 [Google AI Studio](https://aistudio.google.com/api-keys) 또는 [OpenAI Platform](https://platform.openai.com/api-keys)에서 발급받습니다. 연결 확인은 작은 샘플 분류 요청을 한 번 보냅니다. AI 분류 시 게시물 설명·링크 주변 문맥이 선택한 제공자로 전송되며 해당 API 요금과 할당량이 적용됩니다. ChatGPT 구독과 OpenAI API 결제는 별개입니다.
 
-키는 Docker 실행 시 서버 데이터 볼륨에, Firebase 실행 시 비공개 Cloud Storage에 저장되고 앱 응답·내보내기에는 포함하지 않습니다. API 키를 채팅이나 GitHub에 넣을 필요가 없습니다. Docker에서는 UI 대신 `.env`의 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정하고 `docker compose up -d --force-recreate`로 다시 실행할 수도 있습니다.
+키는 Docker 실행 시 서버 데이터 볼륨에, Firebase 실행 시 비공개 Cloud Storage에 저장되고 앱 응답·내보내기에는 포함하지 않습니다. API 키를 채팅이나 GitHub에 넣을 필요가 없습니다. Docker에서는 UI 대신 `.env`의 `AI_PROVIDER`와 해당 제공자의 환경 변수를 설정하고 `docker compose up -d --force-recreate`로 다시 실행할 수도 있습니다. Gemini는 `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-flash-latest`를 사용합니다. OpenAI는 `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_MODEL`을 사용합니다. 기존 제공자 정보가 없는 앱 설정 파일은 OpenAI 설정으로 복원합니다.
 
 ## 수집·분류 범위
 
