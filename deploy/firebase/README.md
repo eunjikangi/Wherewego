@@ -56,7 +56,9 @@ bash deploy/firebase/ml-cherry.sh
 
 옵션을 생략하면 이전 기본 동작인 Hosting `PROJECT_ID`, Firestore `(default)`를 사용합니다. Firestore 이름은 `(default)` 또는 4–63자의 소문자·숫자·하이픈이며, 문자로 시작하고 문자나 숫자로 끝나야 합니다. UUID 형태의 이름은 사용할 수 없습니다. `--check` 출력에는 선택한 사이트와 데이터베이스가 표시되지만 리소스 존재 여부나 이름 사용 가능성까지 확인하지는 않습니다.
 
-전역 `gcloud config set project`를 실행하지 않습니다. 모든 프로젝트 작업과 Firebase 배포에 명시적인 프로젝트 ID를 전달합니다. 저장소의 Dockerfile을 `gcloud run deploy --source`로 빌드하므로 로컬 Docker 설치는 필요하지 않습니다. 소스 빌드 전용 `wherewego-build` 서비스 계정에 `roles/run.builder`를 부여합니다. 최신 gcloud를 사용해야 `--build-service-account`를 지원합니다.
+전역 `gcloud config set project`를 실행하지 않습니다. 모든 프로젝트 작업과 Firebase 배포에 명시적인 프로젝트 ID를 전달합니다. 저장소의 Dockerfile은 `cloudbuild.yaml`을 지정한 `gcloud builds submit`으로 빌드하므로 로컬 Docker 설치는 필요하지 않습니다. Docker의 `DOCKER_BUILDKIT=1`을 명시해 Dockerfile의 선택적 CA secret mount를 지원합니다. 빌드 전용 `wherewego-build` 서비스 계정에 `roles/run.builder`를 부여하고 Cloud Logging으로 빌드 로그를 보냅니다.
+
+이미지는 지정 지역의 Artifact Registry `cloud-run-source-deploy` 저장소에 올립니다. 해당 저장소가 없으면 Docker 형식으로 만들고, `gcloud run deploy --image`로 Cloud Run에 배포합니다. 자동 `--source` 빌드의 legacy Docker 경로를 사용하지 않으며 기존 Dockerfile도 변경하지 않습니다. 빌드가 실패하면 Cloud Run 배포 단계로 넘어가지 않고 오류로 중단합니다.
 
 런타임 전용 `wherewego-runtime` 계정에는 프로젝트의 `roles/datastore.user`, 해당 버킷의 `roles/storage.objectAdmin`, 해당 관리자 암호 Secret의 `roles/secretmanager.secretAccessor`만 부여합니다. 버킷은 균일한 버킷 수준 접근과 공개 접근 방지를 적용합니다. Cloud Run URL은 인터넷에서 접속 가능하며 앱의 관리자 인증으로 UI, API와 로그인 브라우저를 보호합니다. 실제 앱 URL을 `PUBLIC_ORIGIN`으로 지정하고 `COOKIE_SECURE=1`을 설정해 HTTPS 쿠키와 요청 출처 검증을 유지합니다. 최종 URL을 안내하기 전에 앱의 `/health` 응답과 Firebase의 `302` 목적지를 확인합니다.
 

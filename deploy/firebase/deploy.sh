@@ -210,10 +210,18 @@ VERSION=${VERSION##*/}
 gc secrets add-iam-policy-binding "$SECRET" --member="serviceAccount:$RUNTIME_SA" \
   --role=roles/secretmanager.secretAccessor --condition=None > /dev/null
 
-printf 'Building Dockerfile and deploying Cloud Run…\n'
-gc run deploy "$SERVICE" --source="$REPO_DIR" --region="$REGION" \
+REPOSITORY='cloud-run-source-deploy'
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:latest"
+if ! gc artifacts repositories describe "$REPOSITORY" --location="$REGION" --format='value(name)' \
+  > /dev/null 2> "$WORK_DIR/artifact-repository-error"; then
+  gc artifacts repositories create "$REPOSITORY" --location="$REGION" --repository-format=docker \
+    --description='Wherewego application images'
+fi
+printf 'Building Dockerfile with BuildKit and deploying Cloud Run…\n'
+gc builds submit "$REPO_DIR" --config="$SCRIPT_DIR/cloudbuild.yaml" --region="$REGION" \
+  --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" --substitutions="_IMAGE=$IMAGE"
+gc run deploy "$SERVICE" --image="$IMAGE" --region="$REGION" \
   --service-account="$RUNTIME_SA" \
-  --build-service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" \
   --cpu=1 --memory=4Gi --min-instances=0 --max-instances=1 --concurrency=40 \
   --timeout=3600 --no-cpu-throttling --session-affinity --port=8000 --allow-unauthenticated \
   --set-env-vars="STORE_BACKEND=firestore,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIRESTORE_DATABASE=$DATABASE_ID,ORGANIZER_STATE_BUCKET=$BUCKET,DATA_DIR=/data,COOKIE_SECURE=1" \
