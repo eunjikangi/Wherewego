@@ -3,58 +3,12 @@
 import hashlib
 from datetime import datetime, timezone
 
-from .store import normalize_url
+from .details import normalize_details, normalize_thumbnail
+from .store import item_search_text, merge_item, normalize_url, reclassified_item
 
 
 ITEMS_COLLECTION = "instagram_organizer_items"
 META_COLLECTION = "instagram_organizer_meta"
-
-
-def merge_item(existing, record, url, now):
-    """Return the merged item and its change type without altering either input."""
-    source = record.get("source", "post")
-    if source not in ("saved", "dm", "post"):
-        source = "post"
-    title = str(record.get("title", "내용 확인이 필요한 게시물"))[:250]
-    body = str(record.get("text", ""))[:2500]
-    category = record.get("category", "분류 보류")
-    classification = record.get("classification", "pending")
-    checked = bool(record.get("detail_checked"))
-    if existing is None:
-        return {
-            "id": hashlib.sha256(url.encode()).hexdigest()[:24],
-            "url": url,
-            "title": title,
-            "text": body,
-            "note": "",
-            "category": category,
-            "sources": [source],
-            "classification": classification,
-            "created_at": now,
-            "updated_at": now,
-            "detail_checked": checked,
-        }, "added"
-
-    sources = list(dict.fromkeys(existing["sources"] + [source]))
-    checked = checked or bool(existing.get("detail_checked"))
-    if len(body) < len(existing["text"]) and not record.get("detail_checked"):
-        body = existing["text"]
-        title = existing["title"]
-        category = existing["category"]
-        classification = existing["classification"]
-    if existing["classification"] == "manual":
-        category = existing["category"]
-        classification = "manual"
-    if not title or title.startswith("내용 확인"):
-        title = existing["title"]
-    changes = {
-        "title": title, "text": body, "category": category,
-        "classification": classification, "sources": sources,
-        "detail_checked": checked,
-    }
-    if all(existing.get(key, False if key == "detail_checked" else None) == value for key, value in changes.items()):
-        return dict(existing), "unchanged"
-    return {**existing, **changes, "updated_at": now}, "updated"
 
 
 class FirestoreStore:
@@ -82,10 +36,19 @@ class FirestoreStore:
     def _item(snapshot):
         if not snapshot.exists:
             return None
-        values = snapshot.to_dict()
+        raw = snapshot.to_dict()
+        # Old documents gain safe defaults; unsupported fields (including full
+        # visual media payloads) are never returned or written back.
+        values = {key: raw.get(key, "") if isinstance(raw.get(key, ""), str) else "" for key in (
+            "url", "title", "text", "note", "category", "classification", "created_at", "updated_at")}
+        values["category"] = values["category"] or "분류 보류"
+        values["classification"] = values["classification"] or "pending"
         values["id"] = snapshot.id
-        values["sources"] = list(values.get("sources", []))
-        values["detail_checked"] = bool(values.get("detail_checked"))
+        sources = raw.get("sources", [])
+        values["sources"] = list(dict.fromkeys(source for source in sources if source in ("saved", "dm", "post"))) if isinstance(sources, list) else []
+        values["detail_checked"] = bool(raw.get("detail_checked"))
+        values["details"] = normalize_details(raw.get("details"))
+        values["thumbnail"] = normalize_thumbnail(raw.get("thumbnail", ""))
         return values
 
     def _reference(self, item_id):
@@ -98,12 +61,33 @@ class FirestoreStore:
         items = [item for item in items if item is not None
                  and (not category or item["category"] == category)
                  and (not source or source in item["sources"])
-                 and (not q or q.casefold() in " ".join(str(item[key]) for key in ("title", "text", "note", "url")).casefold())]
+                 and (not q or q.casefold() in item_search_text(item).casefold())]
         return sorted(items, key=lambda item: item["updated_at"], reverse=True)
+
+    def _count_items(self, transaction=None):
+        try:
+            snapshots = self.items.stream(transaction=transaction)
+        except TypeError:
+            # The in-memory transaction runner used in tests holds a lock.
+            snapshots = self.items.stream()
+        return sum(1 for snapshot in snapshots if snapshot.exists)
 
     def total(self):
         snapshot = self.summary.get()
-        return int(snapshot.to_dict().get("count", 0)) if snapshot.exists else 0
+        if snapshot.exists:
+            return int(snapshot.to_dict().get("count", 0))
+        if not self._count_items():
+            return 0
+
+        def operation(transaction):
+            summary = self.summary.get(transaction=transaction)
+            if summary.exists:
+                return int(summary.to_dict().get("count", 0))
+            count = self._count_items(transaction)
+            transaction.set(self.summary, {"count": count}, merge=True)
+            return count
+
+        return self._transaction(operation)
 
     def upsert(self, records):
         added = updated = 0
@@ -120,7 +104,7 @@ class FirestoreStore:
                 item, change = merge_item(existing, record, url, now)
                 if change == "added":
                     summary = self.summary.get(transaction=transaction)
-                    count = int(summary.to_dict().get("count", 0)) if summary.exists else 0
+                    count = int(summary.to_dict().get("count", 0)) if summary.exists else self._count_items(transaction)
                     # Complete every read before the first write, as Firestore requires.
                     transaction.set(reference, item)
                     transaction.set(self.summary, {"count": count + 1}, merge=True)
@@ -162,15 +146,7 @@ class FirestoreStore:
                 existing = self._item(reference.get(transaction=transaction))
                 if existing is None or existing["classification"] == "manual":
                     return False
-                item = {
-                    **existing,
-                    "category": record.get("category", "분류 보류"),
-                    "classification": record.get("classification", "pending"),
-                    "text": record.get("text", "")[:2500] or existing["text"],
-                    "title": record.get("title", "")[:250] or existing["title"],
-                    "detail_checked": bool(record.get("detail_checked") or existing.get("detail_checked")),
-                    "updated_at": now,
-                }
+                item = reclassified_item(existing, record, now)
                 transaction.set(reference, item)
                 return True
 

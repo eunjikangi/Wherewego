@@ -18,6 +18,6 @@ jobs:
       - run: python -m unittest discover -s tests -v
         env:
           TEST_BROWSER: '1'
-      - run: node --test tests/test_extension.cjs
+      - run: node --test tests/*.cjs
       - run: for script in static/*.js extension/*.js; do node --check "$script"; done
       - run: for script in deploy/firebase/*.sh; do bash -n "$script"; done

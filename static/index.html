@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#111c35" />
-    <title>모아분류 · 인스타그램 자료 정리</title>
+    <title>모아분류 · 내가 모은 곳</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/login-import.js"></script>
     <script src="/static/app.js" defer></script>
@@ -23,10 +23,10 @@
       <aside class="sidebar" aria-label="자료 필터">
         <div class="sidebar-title">라이브러리 <span id="sidebar-total" class="count">0</span></div>
         <div class="source-tabs" role="group" aria-label="출처">
-          <button class="source-button active" type="button" data-source="" aria-pressed="true"><span class="source-symbol" aria-hidden="true">▦</span>전체 자료</button>
-          <button class="source-button" type="button" data-source="saved" aria-pressed="false"><span class="source-symbol" aria-hidden="true">▤</span>저장함</button>
-          <button class="source-button" type="button" data-source="dm" aria-pressed="false"><span class="source-symbol" aria-hidden="true">↗</span>DM 공유</button>
-          <button class="source-button" type="button" data-source="post" aria-pressed="false"><span class="source-symbol" aria-hidden="true">▧</span>게시물</button>
+          <button class="source-button active" type="button" data-source="" aria-pressed="true"><span class="source-symbol" aria-hidden="true">▦</span><span>전체 자료</span><span class="facet-count" data-source-count="">0</span></button>
+          <button class="source-button" type="button" data-source="saved" aria-pressed="false"><span class="source-symbol" aria-hidden="true">▤</span><span>저장함</span><span class="facet-count" data-source-count="saved">0</span></button>
+          <button class="source-button" type="button" data-source="dm" aria-pressed="false"><span class="source-symbol" aria-hidden="true">↗</span><span>DM 공유</span><span class="facet-count" data-source-count="dm">0</span></button>
+          <button class="source-button" type="button" data-source="post" aria-pressed="false"><span class="source-symbol" aria-hidden="true">▧</span><span>게시물</span><span class="facet-count" data-source-count="post">0</span></button>
         </div>
         <div class="category-heading">카테고리 <button id="clear-category" type="button" class="text-button" hidden>초기화</button></div>
         <div id="category-filters" class="category-filters" role="group" aria-label="카테고리"></div>
@@ -39,11 +39,39 @@
       <main class="main-content">
         <section class="page-heading" aria-labelledby="page-title">
           <div>
-            <div class="eyebrow">PERSONAL LIBRARY</div>
-            <h1 id="page-title">내 인스타그램 자료</h1>
-            <p class="page-description">저장한 게시물·릴스, DM으로 주고받은 링크를 한곳에.</p>
+            <div class="eyebrow">MY LITTLE COLLECTION</div>
+            <h1 id="page-title">내가 모은 곳</h1>
+            <p class="page-description">다음에 가고 싶은 곳, 다시 보고 싶은 아이디어.<br />저장함과 DM에서 모아 카테고리별로 찾아보세요.</p>
           </div>
-          <span id="connection-status" class="status-pill" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">서버 연결 중</span></span>
+          <div class="page-actions"><span id="connection-status" class="status-pill" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">서버 연결 중</span></span><button id="bring-items-button" class="button button-primary" type="button">자료 가져오기 <span aria-hidden="true">＋</span></button></div>
+        </section>
+
+        <section class="category-overview" aria-labelledby="category-overview-title">
+          <div class="overview-heading"><h2 id="category-overview-title">어떤 걸 찾아볼까요?</h2><span id="overview-total" class="result-count">전체 0개</span></div>
+          <div id="category-tiles" class="category-tiles" role="group" aria-label="카테고리별 자료"></div>
+        </section>
+
+        <section class="library-section" aria-labelledby="library-heading">
+          <div class="library-toolbar">
+            <div class="library-heading"><h2 id="library-heading">전체 자료</h2><span id="result-count" class="result-count">0개</span></div>
+            <div class="library-tools">
+              <button id="reclassify-button" class="button button-outline" type="button" disabled>AI로 정보 보완</button>
+              <label class="search-field"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.7" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="sr-only">자료·장소·주소·메뉴 검색</span><input id="search-input" type="search" placeholder="장소, 주소, 메뉴, 메모 검색" autocomplete="off" /></label>
+              <div class="view-switch" role="group" aria-label="보기 방식"><button id="view-grid" class="active" type="button" aria-pressed="true" aria-label="카드로 보기">▦</button><button id="view-list" type="button" aria-pressed="false" aria-label="목록으로 보기">☰</button></div>
+              <a class="export-link" id="export-link" href="/api/export" download="instagram-library.json">내보내기 <span aria-hidden="true">↓</span></a>
+            </div>
+          </div>
+          <div class="library-facets"><button id="pending-filter" class="quick-filter" type="button" aria-pressed="false">분류 보류 <span id="pending-count">0</span></button><button id="needs-media-filter" class="quick-filter" type="button" aria-pressed="false">사진·설명 보완 <span id="needs-media-count">0</span></button><label class="area-filter"><span>지역</span><select id="area-filter" aria-label="지역 필터"><option value="">모든 지역</option></select></label><button id="reset-filters" class="text-button" type="button" hidden>모두 해제</button></div>
+          <div id="filter-summary" class="filter-summary" role="group" aria-label="적용한 필터" hidden></div>
+          <div id="items-loading" class="items-loading" hidden role="status">자료를 불러오는 중입니다.</div>
+          <div id="items-grid" class="items-grid"></div>
+          <div id="empty-state" class="empty-state" hidden>
+            <div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M13 8h22a3 3 0 0 1 3 3v30L24 32 10 41V11a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M18 18h12M18 24h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+            <h3 id="empty-title">아직 모아 둔 자료가 없어요</h3>
+            <p id="empty-description">PC 크롬·엣지에 확장 프로그램을 설치하세요.<br />평소 쓰는 Instagram에서 자료를 가져온 뒤 이곳에서 확인할 수 있어요.</p>
+            <button id="empty-action" class="button button-primary" type="button">PC에서 가져오는 방법 보기 <span aria-hidden="true">↑</span></button>
+            <p class="empty-footnote" id="empty-footnote">내용이 부족해 판단하기 어려운 자료는 ‘분류 보류’로 남겨 둡니다.</p>
+          </div>
         </section>
 
         <section class="collection-panel" id="client-collection" aria-labelledby="collection-title" tabindex="-1">
@@ -54,16 +82,18 @@
             </div>
             <a class="button button-primary" id="extension-download" href="/extension.zip" download="wherewego-extension.zip">PC 확장 프로그램 받기 <span aria-hidden="true">↓</span></a>
           </div>
-          <ol class="collection-steps">
+          <details class="collection-guide" id="collection-guide"><summary>설치·수집 방법 보기 <span>확장 프로그램 v0.2.0</span></summary><ol class="collection-steps">
             <li><strong>확장 프로그램 설치</strong><span>압축을 푼 뒤 <code>chrome://extensions</code> 또는 <code>edge://extensions</code>에서 ‘개발자 모드’ → ‘압축해제된 확장 프로그램 로드’로 폴더를 선택하세요.</span></li>
-            <li><strong>PC에서 Instagram 열기</strong><span>평소 쓰는 브라우저에서 직접 로그인하고 저장함·게시물 또는 원하는 DM을 여세요. 더 가져오려면 직접 스크롤하세요.</span></li>
-            <li><strong>가져올 내용 확인</strong><span>확장에서 자료를 모아 ‘앱에서 확인’을 누르세요. 이 앱에서 내용을 확인한 뒤 가져오기·분류를 시작합니다.</span></li>
+            <li><strong>저장함·DM에서 자료 모으기</strong><span>평소 로그인한 Instagram을 열고 확장의 ‘현재 화면 수집’ 또는 ‘스크롤하며 수집’을 누르세요. DM의 공유 카드가 안 잡히면 ‘DM 공유 게시물 찾기’를 누르세요.</span></li>
+            <li><strong>사진 속 주소·메뉴 읽기</strong><span>게시물이나 릴스를 연 뒤 ‘사진·슬라이드·릴스 읽기’를 누르세요. 화면에서 읽은 사진과 동영상 프레임을 함께 가져옵니다.</span></li>
+            <li><strong>앱에서 확인하고 분류하기</strong><span>확장에서 ‘목록을 앱으로 보내기’를 누르세요. 이미지가 많아 보내기 어려우면 ‘JSON 복사’ 후 아래에 붙여넣으세요. 내용을 확인하고 가져오기·분류를 시작합니다.</span></li>
           </ol>
+          <p class="extension-update-note">이미 설치했다면 새 압축 파일을 받아 기존 확장 폴더의 파일을 바꾼 뒤, 확장 관리 화면에서 새로고침(↻)을 누르세요. Instagram 탭도 새로고침하세요.</p></details>
           <p class="collection-device-note">수집은 PC에서 진행해요. 정리한 자료는 휴대폰에서도 볼 수 있어요. 확장 프로그램은 Instagram 비밀번호나 로그인 쿠키를 보내지 않습니다.</p>
           <details id="import-paste-panel" class="import-paste-panel">
             <summary>확장에서 복사한 자료 붙여넣기</summary>
-            <label class="field-label" for="import-paste-input">확장의 ‘자료 복사’로 복사한 내용을 붙여넣으세요.</label>
-            <textarea id="import-paste-input" class="editor-textarea" rows="4" maxlength="1572864" spellcheck="false" autocomplete="off" placeholder='{"version":1,"records":[...]}'></textarea>
+            <label class="field-label" for="import-paste-input">확장의 ‘JSON 복사’로 복사한 내용을 붙여넣으세요.</label>
+            <textarea id="import-paste-input" class="editor-textarea" rows="4" maxlength="6291456" spellcheck="false" autocomplete="off" placeholder='{"version":1,"records":[...]}'></textarea>
             <button id="import-paste-preview" class="button button-outline" type="button">붙여넣은 내용 확인</button>
           </details>
           <p id="import-error" class="import-error" role="alert" hidden></p>
@@ -71,10 +101,10 @@
             <div class="import-preview-heading"><h3 id="import-preview-title">가져올 자료 확인</h3><span id="import-count" class="result-count"></span></div>
             <p id="import-summary" class="import-summary"></p>
             <ul id="import-list" class="import-list"></ul>
-            <p class="import-context-notice">AI는 가져온 설명과 링크 주변 문맥으로 분류합니다. 링크만 있거나 설명이 짧은 자료는 ‘분류 보류’가 될 수 있어요. 원문 전체를 자동으로 읽지는 않습니다.</p>
+            <p id="import-context-notice" class="import-context-notice">가져온 설명과 사진·동영상 프레임에서 장소, 주소, 메뉴를 읽어 정리합니다. 읽히지 않은 정보는 빈칸으로 두고, 설명이 부족한 자료는 ‘분류 보류’로 남겨요.</p>
           </section>
           <div class="collection-actions">
-            <label id="ai-control" class="ai-control" hidden><input id="use-ai" type="checkbox" /><span>AI 분류 <small>가져온 설명과 링크 주변 문맥을 외부 AI API로 전송</small></span></label>
+            <label id="ai-control" class="ai-control" hidden><input id="use-ai" type="checkbox" /><span><span id="use-ai-label">AI로 분류·정보 정리</span><small id="use-ai-description">설명과 사진·동영상 프레임을 연결한 AI API로 전송해 주소·메뉴를 읽어요.</small></span></label>
             <button id="ai-setup-cta" class="text-button" type="button">AI API 연결하기</button>
             <button id="import-confirm" class="button button-primary" type="button" disabled>가져오기·분류</button>
             <button id="import-discard" class="text-button" type="button" hidden>가져올 자료 버리기</button>
@@ -103,38 +133,18 @@
           </section>
         </details>
 
-        <section class="library-section" aria-labelledby="library-heading">
-          <div class="library-toolbar">
-            <div class="library-heading"><h2 id="library-heading">전체 자료</h2><span id="result-count" class="result-count">0개</span></div>
-            <div class="library-tools">
-              <button id="reclassify-button" class="button button-outline" type="button" disabled>AI로 다시 분류</button>
-              <label class="search-field"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.7" cy="8.7" r="5.7" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="sr-only">자료 검색</span><input id="search-input" type="search" placeholder="제목, 내용, 메모 검색" autocomplete="off" /></label>
-              <a class="export-link" id="export-link" href="/api/export" download="instagram-library.json">내보내기 <span aria-hidden="true">↓</span></a>
-            </div>
-          </div>
-          <div id="filter-summary" class="filter-summary" hidden></div>
-          <div id="items-loading" class="items-loading" hidden role="status">자료를 불러오는 중입니다.</div>
-          <div id="items-grid" class="items-grid"></div>
-          <div id="empty-state" class="empty-state" hidden>
-            <div class="empty-icon" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><path d="M13 8h22a3 3 0 0 1 3 3v30L24 32 10 41V11a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M18 18h12M18 24h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
-            <h3 id="empty-title">아직 모아 둔 자료가 없어요</h3>
-            <p id="empty-description">PC 크롬·엣지에 확장 프로그램을 설치하세요.<br />평소 쓰는 Instagram에서 자료를 가져온 뒤 이곳에서 확인할 수 있어요.</p>
-            <button id="empty-action" class="button button-primary" type="button">PC에서 가져오는 방법 보기 <span aria-hidden="true">↑</span></button>
-            <p class="empty-footnote" id="empty-footnote">내용이 부족해 판단하기 어려운 자료는 ‘분류 보류’로 남겨 둡니다.</p>
-          </div>
-        </section>
         <footer class="app-footer">모아분류 <span>PC에서 가져온 자료를 저장하고 분류합니다.</span></footer>
       </main>
     </div>
     <dialog id="ai-settings-dialog" class="settings-dialog" aria-labelledby="ai-settings-title">
       <form id="ai-settings-form">
         <div class="settings-heading"><div><div class="eyebrow">AI CONNECTION</div><h2 id="ai-settings-title">AI 설정</h2></div><button id="ai-settings-close" class="dialog-close" type="button" aria-label="AI 설정 닫기">×</button></div>
-        <p class="settings-description">Gemini 또는 OpenAI API를 연결하면 모아 둔 자료를 AI로 분류할 수 있어요.</p>
+        <p class="settings-description">Gemini 또는 OpenAI API를 연결하면 설명과 사진에서 주소·메뉴를 읽고, 자료를 카테고리별로 정리할 수 있어요.</p>
         <p id="ai-config-status" class="config-status" role="status">연결 상태를 확인하고 있습니다.</p>
         <label class="field-label settings-field">AI 제공자<select id="ai-provider" class="editor-input"><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select></label>
         <label class="field-label settings-field">API 키<input id="ai-api-key" class="editor-input" type="password" placeholder="API 키를 입력하세요" autocomplete="off" spellcheck="false" required /></label>
         <label class="field-label settings-field">모델<input id="ai-model" class="editor-input" type="text" value="gemini-flash-latest" autocomplete="off" spellcheck="false" maxlength="80" required /></label>
-        <p class="settings-notice">API 키는 이 서버에 저장됩니다. AI 분류에는 게시물 설명과 링크 주변 문맥을 전송합니다. API 사용료가 발생합니다.</p>
+        <p class="settings-notice">API 키는 이 서버에 저장됩니다. AI로 정리할 때 게시물 설명과 가져온 사진·동영상 프레임을 전송합니다. API 사용료가 발생합니다.</p>
         <p id="ai-settings-error" class="settings-error" role="alert" hidden></p>
         <div class="settings-actions"><button id="ai-settings-cancel" class="button button-outline" type="button">닫기</button><button id="ai-settings-save" class="button button-primary" type="submit">연결 확인 · 저장</button></div>
       </form>

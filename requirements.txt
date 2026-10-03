@@ -5,3 +5,4 @@ websockets==15.0.1
 httpx==0.28.1
 google-cloud-firestore==2.21.0
 google-cloud-storage==3.3.0
+Pillow==12.3.0

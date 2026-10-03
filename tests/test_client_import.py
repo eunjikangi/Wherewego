@@ -211,7 +211,7 @@ class ClientImportTests(test_core.APITests):
 
         def chunks():
             yield b'{"records":['
-            for _ in range(33):
+            for _ in range(IMPORT_BODY_LIMIT // 65536 + 1):
                 yield b"x" * 65536
 
         response = self.client.post("/api/import", content=chunks(), headers=headers)

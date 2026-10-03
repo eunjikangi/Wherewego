@@ -18,7 +18,7 @@ class Element {
   constructor(tag, attrs = {}, text = '', children = [], options = {}) {
     this.tag = tag; this.attrs = attrs; this.ownText = text; this.children = children;
     this.style = {display: 'block', visibility: 'visible', overflowY: 'visible', ...options.style};
-    this.rect = {left: 0, right: 1000, ...options.rect};
+    this.rect = {left: 0, right: 1000, top: 0, bottom: 200, ...options.rect};
     this.clientHeight = options.clientHeight || 200; this.scrollHeight = options.scrollHeight || 200; this.scrollTop = 500;
     for (const child of children) child.parentElement = this;
     this.content = attrs.content || '';
@@ -99,6 +99,40 @@ test('DM refuses to scan the whole page when conversation scope is unknown', () 
   const s = fixture(new Element('body', {}, '', [new Element('main', {}, '', [new Element('a', {href: 'https://example.test/'}, '목록 링크')])]), 'https://www.instagram.com/direct/t/123/');
   assert.throws(() => s.WherewegoCollector.extract(s.WherewegoCollector.validatePage(s.location.href)), /메시지 영역/);
 });
+test('DM works without main and captures semantic card attributes and literal permalinks', () => {
+  const sidebar = new Element('aside', {}, '', [new Element('div', {role: 'link', 'data-url': '/p/OtherThread/'}, '다른 대화')]);
+  const card = new Element('div', {role: 'button', 'data-url': encodeURIComponent('https://www.instagram.com/reel/Card/'), 'aria-label': '공유한 릴스'}, '부산 여행', [new Element('img', {alt: '부산 바닷가'})]);
+  const literal = new Element('div', {role: 'listitem'}, 'https://www.instagram.com/p/Literal/');
+  const log = new Element('div', {role: 'log'}, '', [card, literal], {rect: {left: 0, right: 390}});
+  const s = fixture(new Element('body', {}, '', [sidebar, log]), 'https://www.instagram.com/direct/t/123/');
+  const records = s.WherewegoCollector.extract(s.WherewegoCollector.validatePage(s.location.href));
+  assert.deepEqual(plain(records.map(item => item.url)), ['https://www.instagram.com/reel/Card/', 'https://www.instagram.com/p/Literal/']);
+  assert.match(records[0].text, /부산 여행/);
+  assert.equal(s.WherewegoCollector.scopeFor('dm'), log);
+});
+test('DM reports URL-less preview cards without clicking them in current capture', async () => {
+  const preview = new Element('div', {role: 'button', 'aria-label': '공유한 게시물'}, '카페', [new Element('img', {alt: '카페'})]);
+  preview.click = () => { throw new Error('unrequested click'); };
+  const profile = new Element('div', {role: 'button', 'aria-label': '프로필 보기'}, '', [new Element('img')]);
+  const log = new Element('div', {role: 'log'}, '', [preview, profile]);
+  const s = fixture(new Element('body', {}, '', [log]), 'https://www.instagram.com/direct/t/123/');
+  const result = await s.WherewegoCollector.collect('current');
+  assert.equal(result.records.length, 0);
+  assert.equal(result.unresolved_cards, 1);
+  assert.match(result.notice, /DM 공유 게시물 찾기/);
+  await assert.rejects(helpers().collect('resolve'), /열린 DM/);
+});
+test('DM unknown plain wrappers cannot borrow another post description', () => {
+  const first = new Element('div', {role: 'link', 'data-href': '/p/First/'}, '첫 번째 카페');
+  const second = new Element('div', {role: 'link', 'data-href': '/p/Second/'}, '둘째 여행');
+  const row = new Element('div', {role: 'row'}, '여러 메시지', [first, second]);
+  const log = new Element('div', {role: 'log'}, '', [row]);
+  const s = fixture(new Element('body', {}, '', [log]), 'https://www.instagram.com/direct/t/123/');
+  const records = s.WherewegoCollector.extract(s.WherewegoCollector.validatePage(s.location.href));
+  assert.equal(records.length, 2);
+  assert.doesNotMatch(records[0].text, /둘째 여행/);
+  assert.doesNotMatch(records[1].text, /첫 번째 카페/);
+});
 test('detail extraction uses only own permalink, not suggested post links', () => {
   const main = new Element('main', {}, '', [new Element('article', {}, '성수 카페와 디저트', [new Element('a', {href: '/p/Suggested/'}, '추천')])]);
   const s = fixture(new Element('body', {}, '', [main]), 'https://www.instagram.com/p/Own/?igsh=x');
@@ -135,6 +169,6 @@ test('handoff restricts destinations and caps actual percent-encoded fragment', 
   const record = {url: 'https://www.instagram.com/p/A/', title: '서울 카페', text: '한글', source: 'saved', source_url: 'https://www.instagram.com/alice/saved/'};
   const url = new URL(p.transferUrl('https://ml-cherry-wherewego.web.app', [record]));
   assert.deepEqual(JSON.parse(decodeURIComponent(url.hash.slice('#wherewego='.length))), {version: 1, records: [record]});
-  assert.throws(() => p.transferUrl('https://ml-cherry-wherewego.web.app', [{...record, text: '가'.repeat(170000)}]), /내용이 많아/);
+  assert.throws(() => p.transferUrl('https://ml-cherry-wherewego.web.app', [{...record, text: '가'.repeat(170000)}]), /주소로 전송할 수 없/);
   assert.throws(() => p.transferUrl('https://ml-cherry-wherewego.web.app', []));
 });

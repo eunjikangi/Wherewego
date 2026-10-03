@@ -20,11 +20,13 @@ import websockets
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator, model_validator
 
 from .browser import BrowserManager
 from .ai import AISettings
 from .classifier import CATEGORIES, classify_records
+from .extractor import analyze_records
+from .media import CapturedMedia, validate_image
 from .store import Store, normalize_url
 
 os.umask(0o077)
@@ -79,11 +81,12 @@ class AIInput(BaseModel):
 class ClassifyInput(BaseModel):
     only_pending: bool = False
     enrich_remote: bool = False
+    extract_details: bool = False
 
 
-IMPORT_BODY_LIMIT = 2 * 1024 * 1024
+IMPORT_BODY_LIMIT = 6 * 1024 * 1024
 EXTENSION_FILES = (
-    "manifest.json", "popup.html", "popup.js", "popup.css", "content.js", "README.md",
+    "manifest.json", "popup.html", "popup.js", "popup.css", "content.js", "media.js", "README.md",
 )
 
 
@@ -125,6 +128,13 @@ class ImportRecord(BaseModel):
     text: StrictStr = Field(default="", max_length=2500)
     source: Literal["saved", "dm", "post"]
     source_url: StrictStr | None = Field(default=None, max_length=2048)
+    media: list[CapturedMedia] = Field(default_factory=list, max_length=10)
+    thumbnail: StrictStr = Field(default="", max_length=34_000)
+
+    @field_validator("thumbnail")
+    @classmethod
+    def thumbnail_image(cls, value):
+        return validate_image(value, thumbnail=True) if value else ""
 
     @model_validator(mode="after")
     def validate_links(self):
@@ -138,6 +148,13 @@ class ImportInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     records: list[ImportRecord] = Field(min_length=1, max_length=500)
     use_ai: StrictBool = False
+    extract_details: StrictBool = False
+
+    @model_validator(mode="after")
+    def media_record_limit(self):
+        if sum(bool(record.media) for record in self.records) > 12:
+            raise ValueError("사진을 포함한 게시물은 한 번에 12개까지 가져올 수 있습니다.")
+        return self
 
 
 async def checkpoint_browser():
@@ -437,9 +454,20 @@ async def run_client_import(options):
     app.state.job = {"status": "running", "message": "PC에서 가져온 링크를 분류하고 있습니다.", "added": 0, "updated": 0}
     try:
         records = [record.model_dump(exclude_none=True) for record in options.records]
-        classified, warning = await classify_records(
-            records, options.use_ai, api_key=app.state.ai.key(),
-            model=app.state.ai.model(), provider=app.state.ai.provider())
+        if options.use_ai and (options.extract_details or any(record.get("media") for record in records)):
+            async def progress(message):
+                app.state.job["message"] = message
+            classified, warning = await analyze_records(
+                records, api_key=app.state.ai.key(), model=app.state.ai.model(),
+                provider=app.state.ai.provider(), progress=progress)
+        else:
+            classified, warning = await classify_records(
+                records, options.use_ai, api_key=app.state.ai.key(),
+                model=app.state.ai.model(), provider=app.state.ai.provider())
+        # Photos are submitted for this analysis only. Persist extracted fields
+        # and the small preview, never the source image array or video frames.
+        for record in classified:
+            record.pop("media", None)
         added, updated = await asyncio.to_thread(app.state.store.upsert, classified)
         message = f"가져온 링크 {len(records)}개: 새 항목 {added}개, 보완한 항목 {updated}개."
         if warning:
@@ -455,29 +483,34 @@ async def run_client_import(options):
         app.state.busy = False
 
 
-@app.post("/api/import")
-async def import_records(request: Request):
-    if app.state.busy:
-        raise HTTPException(409, "이미 작업 중입니다.")
+async def read_capture_input(request: Request):
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(415, "JSON 형식으로 가져오세요.")
     length = request.headers.get("content-length")
     if length is not None:
         try:
             if int(length) < 0 or int(length) > IMPORT_BODY_LIMIT:
-                raise HTTPException(413, "한 번에 가져오는 자료는 2MB 이내로 제한됩니다.")
+                raise HTTPException(413, "한 번에 가져오는 자료는 6MB 이내로 제한됩니다. 사진을 나누어 가져오세요.")
         except ValueError:
             raise HTTPException(400, "요청 크기를 확인할 수 없습니다.") from None
     body = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > IMPORT_BODY_LIMIT:
-            raise HTTPException(413, "한 번에 가져오는 자료는 2MB 이내로 제한됩니다.")
+            raise HTTPException(413, "한 번에 가져오는 자료는 6MB 이내로 제한됩니다. 사진을 나누어 가져오세요.")
         body.extend(chunk)
     try:
         values = ImportInput.model_validate_json(bytes(body))
     except ValidationError:
         # Avoid returning submitted credentials or private DM text in validation errors.
-        raise HTTPException(422, "수집 데이터 형식이나 링크를 확인하세요. 한 번에 1~500개를 가져올 수 있습니다.") from None
+        raise HTTPException(422, "수집 데이터 형식·링크·사진을 확인하세요. 링크 1~500개, 사진 포함 게시물 12개까지 가져올 수 있습니다.") from None
+    return values
+
+
+@app.post("/api/import")
+async def import_records(request: Request):
+    if app.state.busy:
+        raise HTTPException(409, "이미 작업 중입니다.")
+    values = await read_capture_input(request)
     if values.use_ai and not app.state.ai.key():
         raise HTTPException(422, "먼저 AI 설정에서 API 키를 연결하세요.")
     # A second request may have started a job while this request was streaming.
@@ -487,6 +520,32 @@ async def import_records(request: Request):
     app.state.job = {"status": "running", "message": "PC에서 가져온 링크를 분류하고 있습니다.", "added": 0, "updated": 0}
     app.state.task = asyncio.create_task(run_client_import(values))
     return await status()
+
+
+@app.post("/api/ai/preview")
+async def analyze_preview(request: Request):
+    """Analyze one explicit capture without changing the user's library."""
+    if app.state.busy:
+        raise HTTPException(409, "진행 중인 작업이 끝난 뒤 분석을 확인하세요.")
+    values = await read_capture_input(request)
+    if len(values.records) != 1:
+        raise HTTPException(422, "미리보기는 게시물 하나씩 확인할 수 있습니다.")
+    if not app.state.ai.key():
+        raise HTTPException(422, "먼저 AI 설정에서 API 키를 연결하세요.")
+    if app.state.busy:
+        raise HTTPException(409, "이미 작업 중입니다.")
+    app.state.busy = True
+    try:
+        result, warning = await analyze_records(
+            [values.records[0].model_dump(exclude_none=True)], api_key=app.state.ai.key(),
+            model=app.state.ai.model(), provider=app.state.ai.provider())
+        for record in result:
+            record.pop("media", None)
+        return {"items": result, "warning": warning}
+    except (ValueError, OSError):
+        raise HTTPException(503, "분석을 확인하지 못했습니다. AI 연결 상태를 확인하세요.") from None
+    finally:
+        app.state.busy = False
 
 
 async def run_reclassification(options):
@@ -502,7 +561,14 @@ async def run_reclassification(options):
             enriched = await app.state.browser.enrich(pending, progress=progress)
             updates = {item["id"]: item for item in enriched}
             records = [updates.get(item["id"], item) for item in records]
-        classified, warning = await classify_records(records, use_ai=True, api_key=app.state.ai.key(), model=app.state.ai.model(), provider=app.state.ai.provider())
+        if options.extract_details:
+            async def progress(message):
+                app.state.job["message"] = message
+            classified, warning = await analyze_records(
+                records, api_key=app.state.ai.key(), model=app.state.ai.model(),
+                provider=app.state.ai.provider(), progress=progress)
+        else:
+            classified, warning = await classify_records(records, use_ai=True, api_key=app.state.ai.key(), model=app.state.ai.model(), provider=app.state.ai.provider())
         updated = await asyncio.to_thread(app.state.store.reclassify, classified)
         message = f"{updated}개 항목을 AI로 다시 분류했습니다. 직접 수정한 카테고리는 유지했습니다."
         if warning:
@@ -531,8 +597,38 @@ async def reclassify(options: ClassifyInput):
 
 
 @app.get("/api/items")
-async def items(q: str = "", category: str = "", source: str = ""):
-    return {"items": await asyncio.to_thread(app.state.store.all, q[:300], category, source)}
+async def items(q: str = "", category: str = "", source: str = "", area: str = "", needs_media: bool = False):
+    values = await asyncio.to_thread(app.state.store.all, q[:300], category, source)
+    if area:
+        area = area.strip()[:80]
+        values = [item for item in values if any(place.get("area") == area
+                  for place in item.get("details", {}).get("places", []))]
+    if needs_media:
+        values = [item for item in values if item_needs_media(item)]
+    return {"items": values}
+
+
+def item_needs_media(item):
+    return item.get("category") == "분류 보류" or item.get("details", {}).get("media_status") in ("failed", "partial")
+
+
+@app.get("/api/library/overview")
+async def library_overview():
+    values = await asyncio.to_thread(app.state.store.all)
+    category_counts = {category: 0 for category in CATEGORIES}
+    source_counts = {source: 0 for source in ("saved", "dm", "post")}
+    areas = set()
+    for item in values:
+        category = item.get("category", "분류 보류")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        for source in set(item.get("sources", [])):
+            if source in source_counts:
+                source_counts[source] += 1
+        areas.update(place["area"] for place in item.get("details", {}).get("places", [])
+                     if isinstance(place.get("area"), str) and place["area"])
+    return {"total": len(values), "category_counts": category_counts,
+            "source_counts": source_counts, "needs_media": sum(item_needs_media(item) for item in values),
+            "areas": sorted(areas)}
 
 
 @app.patch("/api/items/{item_id}")
